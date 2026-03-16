@@ -6,6 +6,8 @@ Starts a simple polling bot that responds to:
   /status       – system stats (products, offers)
   /ingresos     – estimated affiliate revenue summary
   /comisiones   – commission rate table per store
+  /ranking      – top offers right now ranked by score + viral potential
+  /estadisticas – click/purchase analytics
   /seguir       – subscribe to keyword alerts  (/seguir iphone)
   /dejar        – unsubscribe from keyword      (/dejar iphone)
   /mis_alertas  – list all active subscriptions
@@ -42,6 +44,8 @@ def run_bot() -> None:  # pragma: no cover
             "tiendas de México y el mundo\\.\n\n"
             "Comandos disponibles:\n"
             "/status – estadísticas del sistema\n"
+            "/ranking – top ofertas actuales\n"
+            "/estadisticas – clics, compras y análisis\n"
             "/ingresos – resumen de ingresos estimados\n"
             "/comisiones – tasas de comisión por tienda\n"
             "/seguir \\<palabra\\> – recibe alertas cuando aparezca esa oferta\n"
@@ -223,9 +227,91 @@ def run_bot() -> None:  # pragma: no cover
         finally:
             db.close()
 
+    async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show top offers ranked by score + viral potential: /ranking"""
+        from database.connection import SessionLocal
+        from database.models import Offer, OfferStatus, Publication
+        from sqlalchemy import desc
+        from sqlalchemy.orm import joinedload
+        from datetime import datetime, timedelta, timezone
+
+        db = SessionLocal()
+        try:
+            cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+            offers = (
+                db.query(Offer)
+                .join(Publication, Offer.id == Publication.offer_id)
+                .options(joinedload(Offer.product))
+                .filter(
+                    Offer.status == OfferStatus.PUBLISHED,
+                    Publication.success.is_(True),
+                    Publication.sent_at >= cutoff,
+                )
+                .order_by(desc(Offer.score), desc(Offer.viral_score))
+                .limit(10)
+                .all()
+            )
+
+            if not offers:
+                await update.message.reply_text(
+                    "📭 No hay ofertas publicadas en las últimas 24 horas.",
+                    disable_web_page_preview=True,
+                )
+                return
+
+            lines = ["🏆 *TOP OFERTAS — Últimas 24 h*", ""]
+            for i, o in enumerate(offers, 1):
+                p = o.product
+                url = o.affiliate_url or p.url
+                name = p.name[:45] + "…" if len(p.name) > 45 else p.name
+                viral = f"  🚀{o.viral_score}" if o.viral_score >= 10 else ""
+                lines.append(
+                    f"{i}\\. [{name}]({url})\n"
+                    f"   💸 \\-{o.discount_pct:.0f}% · ⭐{o.score}{viral}"
+                )
+
+            await update.message.reply_text(
+                "\n".join(lines),
+                parse_mode="MarkdownV2",
+                disable_web_page_preview=True,
+            )
+        finally:
+            db.close()
+
+    async def estadisticas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show click/purchase analytics: /estadisticas"""
+        from database.connection import SessionLocal
+        from services.click_tracker import get_global_stats
+
+        db = SessionLocal()
+        try:
+            stats_7 = get_global_stats(db, days=7)
+            stats_30 = get_global_stats(db, days=30)
+
+            text = (
+                "📊 *Estadísticas de RadardeOfertas*\n\n"
+                "📅 *Últimos 7 días:*\n"
+                f"  👆 Clics: {stats_7['total_clicks']:,}\n"
+                f"  🛒 Compras: {stats_7['total_purchases']:,}\n"
+                f"  📈 Conversión: {stats_7['conversion_rate']:.1%}\n\n"
+                "📅 *Últimos 30 días:*\n"
+                f"  👆 Clics: {stats_30['total_clicks']:,}\n"
+                f"  🛒 Compras: {stats_30['total_purchases']:,}\n"
+                f"  📈 Conversión: {stats_30['conversion_rate']:.1%}"
+            )
+            await update.message.reply_text(
+                text,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        finally:
+            db.close()
+
     app = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("ranking", ranking))
+    app.add_handler(CommandHandler("estadisticas", estadisticas))
     app.add_handler(CommandHandler("ingresos", ingresos))
     app.add_handler(CommandHandler("comisiones", comisiones))
     app.add_handler(CommandHandler("seguir", seguir))

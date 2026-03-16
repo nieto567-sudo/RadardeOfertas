@@ -123,7 +123,12 @@ class Offer(Base):
     offer_type = Column(Enum(OfferType), nullable=False)
     status = Column(Enum(OfferStatus), default=OfferStatus.PENDING, nullable=False)
     rapid_drop = Column(Boolean, default=False)
+    # Supplementary scores computed after the main scorer
+    viral_score = Column(Integer, default=0, nullable=False)
+    resale_score = Column(Integer, default=0, nullable=False)
     detected_at = Column(DateTime, server_default=func.now(), index=True)
+    # Offer expires if still PENDING after this deadline
+    publication_deadline = Column(DateTime, nullable=True)
     affiliate_url = Column(Text, nullable=True)
 
     product = relationship("Product", back_populates="offers")
@@ -246,4 +251,56 @@ class RevenueRecord(Base):
         return (
             f"<RevenueRecord offer_id={self.offer_id} "
             f"store={self.store!r} estimated={self.estimated_commission_mxn:.2f}>"
+        )
+
+
+class OfferClickEvent(Base):
+    """
+    Recorded each time a user clicks on an offer link.
+
+    Used to calculate engagement metrics, CTR, and to rank future offers.
+    """
+
+    __tablename__ = "offer_click_events"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    offer_id = Column(
+        Integer, ForeignKey("offers.id", ondelete="CASCADE"), nullable=False
+    )
+    source = Column(String(64), default="telegram", nullable=False)
+    clicked_at = Column(DateTime, server_default=func.now(), index=True)
+
+    offer = relationship("Offer")
+
+    __table_args__ = (Index("ix_click_offer_id", "offer_id"),)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<OfferClickEvent offer_id={self.offer_id} source={self.source!r}>"
+
+
+class OfferPurchaseEvent(Base):
+    """
+    Recorded when a confirmed purchase / affiliate conversion is detected.
+
+    ``revenue_mxn`` is the actual or estimated commission earned (MXN).
+    """
+
+    __tablename__ = "offer_purchase_events"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    offer_id = Column(
+        Integer, ForeignKey("offers.id", ondelete="CASCADE"), nullable=False
+    )
+    revenue_mxn = Column(Float, default=0.0, nullable=False)
+    source = Column(String(64), default="telegram", nullable=False)
+    purchased_at = Column(DateTime, server_default=func.now(), index=True)
+
+    offer = relationship("Offer")
+
+    __table_args__ = (Index("ix_purchase_offer_id", "offer_id"),)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<OfferPurchaseEvent offer_id={self.offer_id} "
+            f"revenue_mxn={self.revenue_mxn:.2f}>"
         )

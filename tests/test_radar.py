@@ -1410,3 +1410,518 @@ class TestOfferProcessorCooldown:
         # Score was 30 < 60, so still returns None but cooldown was NOT the cause
         assert result is None
         assert mock_offer.status == OfferStatus.DISCARDED
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Smart Hours
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestSmartHours:
+    """Tests for services.smart_hours."""
+
+    def setup_method(self):
+        from services.smart_hours import is_good_time_to_publish, minutes_until_next_window
+        self.is_good = is_good_time_to_publish
+        self.until_next = minutes_until_next_window
+
+    def _utc(self, hour_mx: int) -> object:
+        """Return a UTC datetime corresponding to the given Mexico City hour (UTC-6)."""
+        from datetime import datetime, timezone, timedelta
+        # Mexico City is UTC-6; to get UTC from MX hour: add 6
+        return datetime(2024, 6, 15, (hour_mx + 6) % 24, 0, tzinfo=timezone.utc)
+
+    def test_morning_window_is_good(self):
+        with patch("services.smart_hours.settings") as ms:
+            ms.SMART_HOURS_ENABLED = True
+            ms.SMART_HOURS_MORNING_START = 7
+            ms.SMART_HOURS_MORNING_END = 10
+            ms.SMART_HOURS_AFTERNOON_START = 12
+            ms.SMART_HOURS_AFTERNOON_END = 15
+            ms.SMART_HOURS_EVENING_START = 19
+            ms.SMART_HOURS_EVENING_END = 23
+            assert self.is_good(self._utc(8)) is True
+
+    def test_bad_hour_is_not_good(self):
+        with patch("services.smart_hours.settings") as ms:
+            ms.SMART_HOURS_ENABLED = True
+            ms.SMART_HOURS_MORNING_START = 7
+            ms.SMART_HOURS_MORNING_END = 10
+            ms.SMART_HOURS_AFTERNOON_START = 12
+            ms.SMART_HOURS_AFTERNOON_END = 15
+            ms.SMART_HOURS_EVENING_START = 19
+            ms.SMART_HOURS_EVENING_END = 23
+            assert self.is_good(self._utc(3)) is False
+
+    def test_disabled_always_true(self):
+        with patch("services.smart_hours.settings") as ms:
+            ms.SMART_HOURS_ENABLED = False
+            assert self.is_good(self._utc(3)) is True
+
+    def test_minutes_until_next_returns_zero_inside_window(self):
+        with patch("services.smart_hours.settings") as ms:
+            ms.SMART_HOURS_ENABLED = True
+            ms.SMART_HOURS_MORNING_START = 7
+            ms.SMART_HOURS_MORNING_END = 10
+            ms.SMART_HOURS_AFTERNOON_START = 12
+            ms.SMART_HOURS_AFTERNOON_END = 15
+            ms.SMART_HOURS_EVENING_START = 19
+            ms.SMART_HOURS_EVENING_END = 23
+            assert self.until_next(self._utc(8)) == 0
+
+    def test_minutes_until_next_positive_outside_window(self):
+        with patch("services.smart_hours.settings") as ms:
+            ms.SMART_HOURS_ENABLED = True
+            ms.SMART_HOURS_MORNING_START = 7
+            ms.SMART_HOURS_MORNING_END = 10
+            ms.SMART_HOURS_AFTERNOON_START = 12
+            ms.SMART_HOURS_AFTERNOON_END = 15
+            ms.SMART_HOURS_EVENING_START = 19
+            ms.SMART_HOURS_EVENING_END = 23
+            # 5am MX = bad time; next window opens at 7am = 120 min away
+            result = self.until_next(self._utc(5))
+            assert result > 0
+
+    def test_evening_window_is_good(self):
+        with patch("services.smart_hours.settings") as ms:
+            ms.SMART_HOURS_ENABLED = True
+            ms.SMART_HOURS_MORNING_START = 7
+            ms.SMART_HOURS_MORNING_END = 10
+            ms.SMART_HOURS_AFTERNOON_START = 12
+            ms.SMART_HOURS_AFTERNOON_END = 15
+            ms.SMART_HOURS_EVENING_START = 19
+            ms.SMART_HOURS_EVENING_END = 23
+            assert self.is_good(self._utc(20)) is True
+
+    def test_boundary_end_is_not_inside(self):
+        with patch("services.smart_hours.settings") as ms:
+            ms.SMART_HOURS_ENABLED = True
+            ms.SMART_HOURS_MORNING_START = 7
+            ms.SMART_HOURS_MORNING_END = 10
+            ms.SMART_HOURS_AFTERNOON_START = 12
+            ms.SMART_HOURS_AFTERNOON_END = 15
+            ms.SMART_HOURS_EVENING_START = 19
+            ms.SMART_HOURS_EVENING_END = 23
+            # hour 10 is NOT inside morning window [7, 10)
+            assert self.is_good(self._utc(10)) is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Viral Detector
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestViralDetector:
+    """Tests for services.viral_detector."""
+
+    def _make_offer(self, discount_pct, offer_type_str="EXCELLENT",
+                    category="", name="Some Product"):
+        from unittest.mock import MagicMock
+        from database.models import OfferType
+        offer = MagicMock()
+        offer.discount_pct = discount_pct
+        offer.offer_type = OfferType[offer_type_str]
+        offer.product.category = category
+        offer.product.name = name
+        return offer
+
+    def test_price_error_gets_bonus(self):
+        from services.viral_detector import calculate_viral_score
+        offer = self._make_offer(30, "PRICE_ERROR", "Gaming y Videojuegos")
+        score = calculate_viral_score(offer)
+        assert score >= 5  # price error bonus
+
+    def test_huge_discount_boosts_score(self):
+        from services.viral_detector import calculate_viral_score
+        offer = self._make_offer(75)
+        score = calculate_viral_score(offer)
+        assert score >= 8
+
+    def test_viral_category_adds_points(self):
+        from services.viral_detector import calculate_viral_score
+        offer = self._make_offer(20, category="celulares y smartphones")
+        score_with_cat = calculate_viral_score(offer)
+        offer_no_cat = self._make_offer(20, category="")
+        score_no_cat = calculate_viral_score(offer_no_cat)
+        assert score_with_cat > score_no_cat
+
+    def test_brand_keyword_boosts(self):
+        from services.viral_detector import calculate_viral_score
+        offer = self._make_offer(20, name="Apple iPhone 15 Pro 256GB")
+        score = calculate_viral_score(offer)
+        assert score >= 3
+
+    def test_max_cap_is_20(self):
+        from services.viral_detector import calculate_viral_score
+        offer = self._make_offer(80, "PRICE_ERROR",
+                                  "celulares y smartphones", "Apple iPhone 15 Pro")
+        score = calculate_viral_score(offer)
+        assert score <= 20
+
+    def test_viral_label_high(self):
+        from services.viral_detector import viral_label
+        assert "ALTO" in viral_label(15)
+
+    def test_viral_label_medium(self):
+        from services.viral_detector import viral_label
+        assert viral_label(7) != ""
+
+    def test_viral_label_low_returns_empty(self):
+        from services.viral_detector import viral_label
+        assert viral_label(3) == ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Resale Detector
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestResaleDetector:
+    """Tests for services.resale_detector."""
+
+    def _make_offer(self, original, current, offer_type_str="EXCELLENT", category=""):
+        from unittest.mock import MagicMock
+        from database.models import OfferType
+        offer = MagicMock()
+        offer.original_price = original
+        offer.current_price = current
+        offer.discount_pct = (original - current) / original * 100
+        offer.offer_type = OfferType[offer_type_str]
+        offer.product.category = category
+        return offer
+
+    def test_price_error_is_opportunity(self):
+        from services.resale_detector import detect_resale_opportunity
+        offer = self._make_offer(10000, 1000, "PRICE_ERROR", "celulares y smartphones")
+        result = detect_resale_opportunity(offer)
+        assert result.is_opportunity is True
+        assert result.score >= 5
+
+    def test_small_saving_not_opportunity(self):
+        from services.resale_detector import detect_resale_opportunity
+        # $200 saving at 40% is below _MIN_SAVING_MXN
+        offer = self._make_offer(500, 300, "EXCELLENT", "celulares y smartphones")
+        result = detect_resale_opportunity(offer)
+        assert result.is_opportunity is False
+
+    def test_large_saving_high_score(self):
+        from services.resale_detector import detect_resale_opportunity
+        offer = self._make_offer(8000, 3000, "EXCELLENT", "gaming y videojuegos")
+        result = detect_resale_opportunity(offer)
+        assert result.score >= 4
+
+    def test_non_resale_category_lower_score(self):
+        from services.resale_detector import detect_resale_opportunity
+        offer_tech = self._make_offer(5000, 2000, "EXCELLENT", "celulares y smartphones")
+        offer_book = self._make_offer(5000, 2000, "EXCELLENT", "libros y educación")
+        assert detect_resale_opportunity(offer_tech).score >= detect_resale_opportunity(offer_book).score
+
+    def test_result_has_reason(self):
+        from services.resale_detector import detect_resale_opportunity
+        offer = self._make_offer(10000, 3000, "EXCELLENT", "gaming y videojuegos")
+        result = detect_resale_opportunity(offer)
+        assert len(result.reason) > 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Offer Filter
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestOfferFilter:
+    """Tests for services.offer_filter."""
+
+    def _make_offer(self, original, current):
+        from unittest.mock import MagicMock
+        offer = MagicMock()
+        offer.original_price = original
+        offer.current_price = current
+        offer.discount_pct = (original - current) / original * 100
+        return offer
+
+    def test_good_offer_passes(self):
+        from services.offer_filter import passes_quality_filter
+        offer = self._make_offer(1000, 500)  # 50% off, $500 saving
+        with patch("services.offer_filter.settings") as ms:
+            ms.MIN_DISCOUNT_PCT = 20.0
+            ms.MIN_ABSOLUTE_SAVING_MXN = 100.0
+            result = passes_quality_filter(offer)
+        assert result.passed is True
+
+    def test_low_discount_fails(self):
+        from services.offer_filter import passes_quality_filter
+        offer = self._make_offer(1000, 900)  # only 10% off
+        with patch("services.offer_filter.settings") as ms:
+            ms.MIN_DISCOUNT_PCT = 20.0
+            ms.MIN_ABSOLUTE_SAVING_MXN = 100.0
+            result = passes_quality_filter(offer)
+        assert result.passed is False
+        assert "descuento" in result.reason
+
+    def test_tiny_saving_fails(self):
+        from services.offer_filter import passes_quality_filter
+        offer = self._make_offer(200, 150)  # 25% off but only $50 saving
+        with patch("services.offer_filter.settings") as ms:
+            ms.MIN_DISCOUNT_PCT = 20.0
+            ms.MIN_ABSOLUTE_SAVING_MXN = 100.0
+            result = passes_quality_filter(offer)
+        assert result.passed is False
+        assert "ahorro" in result.reason
+
+    def test_boundary_passes(self):
+        from services.offer_filter import passes_quality_filter
+        offer = self._make_offer(500, 400)  # exactly 20% off, $100 saving
+        with patch("services.offer_filter.settings") as ms:
+            ms.MIN_DISCOUNT_PCT = 20.0
+            ms.MIN_ABSOLUTE_SAVING_MXN = 100.0
+            result = passes_quality_filter(offer)
+        assert result.passed is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Product Classifier
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestProductClassifier:
+    """Tests for services.product_classifier."""
+
+    def setup_method(self):
+        from services.product_classifier import classify_product, update_product_category
+        self.classify = classify_product
+        self.update = update_product_category
+
+    def test_iphone_classified_as_phones(self):
+        cat = self.classify("Apple iPhone 15 Pro Max 256GB Titanio")
+        assert cat == "Celulares y Smartphones"
+
+    def test_playstation_classified_as_gaming(self):
+        cat = self.classify("Sony PlayStation 5 Slim Console")
+        assert cat == "Gaming y Videojuegos"
+
+    def test_laptop_classified(self):
+        cat = self.classify("Dell XPS 15 laptop Intel i9 32GB RAM")
+        assert cat == "Laptops y Computadoras"
+
+    def test_smart_tv_classified(self):
+        cat = self.classify("LG 65 pulgadas smart tv 4K OLED")
+        assert cat == "Televisores y Audio"
+
+    def test_unknown_returns_general(self):
+        cat = self.classify("Producto sin categoría especial xyzabc")
+        assert cat == "General"
+
+    def test_update_sets_category_when_missing(self):
+        from unittest.mock import MagicMock
+        product = MagicMock()
+        product.category = None
+        data = MagicMock()
+        data.name = "Nintendo Switch OLED edición especial"
+        changed = self.update(product, data)
+        assert changed is True
+        assert product.category == "Gaming y Videojuegos"
+
+    def test_update_skips_when_category_set(self):
+        from unittest.mock import MagicMock
+        product = MagicMock()
+        product.category = "Already Set"
+        data = MagicMock()
+        data.name = "iPhone 15"
+        changed = self.update(product, data)
+        assert changed is False
+        assert product.category == "Already Set"  # unchanged
+
+    def test_ipad_classified_as_tablet(self):
+        cat = self.classify("Apple iPad Pro 12.9 M2 Wi-Fi 256GB")
+        assert cat == "Tablets y E-readers"
+
+    def test_airpods_classified_as_audio(self):
+        cat = self.classify("Apple AirPods Pro 2da Generación con MagSafe")
+        assert cat == "Televisores y Audio"
+
+    def test_case_insensitive(self):
+        cat = self.classify("APPLE IPHONE 15 PRO MAX 256GB")
+        assert cat == "Celulares y Smartphones"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Click Tracker
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestClickTracker:
+    """Tests for services.click_tracker."""
+
+    def test_record_click_creates_event(self):
+        from services.click_tracker import record_click
+        db = MagicMock()
+        event = record_click(db, offer_id=1, source="telegram")
+        db.add.assert_called_once_with(event)
+        assert event.offer_id == 1
+        assert event.source == "telegram"
+
+    def test_record_purchase_creates_event(self):
+        from services.click_tracker import record_purchase
+        db = MagicMock()
+        event = record_purchase(db, offer_id=2, revenue_mxn=45.0)
+        db.add.assert_called_once_with(event)
+        assert event.offer_id == 2
+        assert event.revenue_mxn == 45.0
+
+    def test_record_click_default_source(self):
+        from services.click_tracker import record_click
+        db = MagicMock()
+        event = record_click(db, offer_id=5)
+        assert event.source == "telegram"
+
+    def test_get_offer_stats_returns_dict(self):
+        from services.click_tracker import get_offer_stats
+        db = MagicMock()
+        db.query.return_value.filter.return_value.count.return_value = 3
+        stats = get_offer_stats(db, offer_id=1)
+        assert stats["offer_id"] == 1
+        assert stats["clicks"] == 3
+        assert stats["purchases"] == 3
+
+    def test_get_global_stats_conversion_rate(self):
+        from services.click_tracker import get_global_stats
+        db = MagicMock()
+        # clicks=100, purchases=5 → conversion_rate=0.05
+        call_count = [0]
+
+        def count_side_effect():
+            call_count[0] += 1
+            return 100 if call_count[0] == 1 else 5
+
+        db.query.return_value.filter.return_value.count.side_effect = count_side_effect
+        stats = get_global_stats(db, days=7)
+        assert stats["period_days"] == 7
+        assert abs(stats["conversion_rate"] - 0.05) < 0.001
+
+    def test_get_global_stats_zero_clicks(self):
+        from services.click_tracker import get_global_stats
+        db = MagicMock()
+        db.query.return_value.filter.return_value.count.return_value = 0
+        stats = get_global_stats(db, days=7)
+        assert stats["conversion_rate"] == 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Message format (publisher)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestPublisherMessage:
+    """Tests for the redesigned TelegramPublisher._build_message."""
+
+    def _make_offer(self, offer_type_str="EXCELLENT", rapid_drop=False,
+                    coupon=None, category="General", viral_score=0, resale_score=0):
+        from unittest.mock import MagicMock
+        from database.models import OfferType
+        offer = MagicMock()
+        offer.offer_type = OfferType[offer_type_str]
+        offer.original_price = 2000.0
+        offer.current_price = 1000.0
+        offer.discount_pct = 50.0
+        offer.score = 80
+        offer.rapid_drop = rapid_drop
+        offer.viral_score = viral_score
+        offer.resale_score = resale_score
+        offer.affiliate_url = "https://amzn.to/test"
+        offer.product.name = "Test Product"
+        offer.product.store = "amazon"
+        offer.product.category = category
+        offer.product.coupon_code = coupon
+        offer.product.image_url = None
+        offer.product.id = 1
+        return offer
+
+    def test_message_contains_product_name(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        msg = TelegramPublisher._build_message(offer)
+        assert "Test Product" in msg
+
+    def test_message_shows_saving(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        msg = TelegramPublisher._build_message(offer)
+        assert "1,000" in msg  # current price
+        assert "1,000" in msg  # saving (original - current = 1000)
+
+    def test_message_shows_excellent_label(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer("EXCELLENT")
+        msg = TelegramPublisher._build_message(offer)
+        assert "EXCELENTE" in msg
+
+    def test_message_shows_price_error_label(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer("PRICE_ERROR")
+        msg = TelegramPublisher._build_message(offer)
+        assert "ERROR DE PRECIO" in msg
+
+    def test_message_shows_rapid_drop(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer(rapid_drop=True)
+        msg = TelegramPublisher._build_message(offer)
+        assert "Caída rápida" in msg
+
+    def test_message_shows_coupon(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer(coupon="SAVE20")
+        msg = TelegramPublisher._build_message(offer)
+        assert "SAVE20" in msg
+
+    def test_message_shows_viral_label_when_high(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer(viral_score=15)
+        msg = TelegramPublisher._build_message(offer)
+        assert "viral" in msg.lower()
+
+    def test_message_shows_resale_flag_when_high(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer(resale_score=7)
+        msg = TelegramPublisher._build_message(offer)
+        assert "reventa" in msg.lower()
+
+    def test_message_contains_buy_link(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        msg = TelegramPublisher._build_message(offer)
+        assert "amzn.to/test" in msg
+
+    def test_message_contains_separator(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        msg = TelegramPublisher._build_message(offer)
+        assert "━" in msg
+
+    def test_no_viral_label_when_score_low(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer(viral_score=1)
+        msg = TelegramPublisher._build_message(offer)
+        # viral label only shown when score >= 5
+        assert "Potencial viral" not in msg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Daily publication cap helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestDailyPublicationCount:
+    """Tests for services.offer_processor.get_daily_publication_count."""
+
+    def test_returns_count(self):
+        from services.offer_processor import get_daily_publication_count
+        db = MagicMock()
+        db.query.return_value.filter.return_value.count.return_value = 7
+        count = get_daily_publication_count(db)
+        assert count == 7
+
+    def test_returns_zero_when_none(self):
+        from services.offer_processor import get_daily_publication_count
+        db = MagicMock()
+        db.query.return_value.filter.return_value.count.return_value = 0
+        assert get_daily_publication_count(db) == 0

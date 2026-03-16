@@ -1,8 +1,10 @@
 """
 Telegram publisher.
 
-Builds a formatted message for each offer and sends it to the configured
-Telegram channel via the Bot API.
+Builds a richly formatted message for each offer and sends it to the
+configured Telegram channel via the Bot API.
+
+Message format uses Telegram Markdown (legacy mode) for compatibility.
 """
 from __future__ import annotations
 
@@ -16,10 +18,15 @@ from database.models import Offer, OfferType, Publication
 from services.offer_scorer import OfferScorer
 from services.price_comparison import compare_across_stores
 from services.price_trend import get_price_trend, trend_emoji
+from services.resale_detector import detect_resale_opportunity
+from services.viral_detector import calculate_viral_score, viral_label
 
 logger = logging.getLogger(__name__)
 
 _API_BASE = "https://api.telegram.org/bot{token}"
+
+# Thin separator line used between message sections
+_SEP = "━━━━━━━━━━━━━━━━━━━━"
 
 
 class TelegramPublisher:
@@ -68,61 +75,92 @@ class TelegramPublisher:
     @staticmethod
     def _build_message(offer: Offer, db=None) -> str:
         product = offer.product
-        label = _offer_label(offer.offer_type)
         url = offer.affiliate_url or product.url
 
-        lines = [
-            f"{label}",
+        # ── Header ────────────────────────────────────────────────────────────
+        label = _offer_label(offer.offer_type)
+        lines = [f"{label}", ""]
+
+        # ── Product info ──────────────────────────────────────────────────────
+        lines.append(f"*{product.name}*")
+        store_name = product.store.replace("_", " ").title()
+        cat = product.category or "General"
+        lines.append(f"🏬 {store_name}  |  🏷 {cat}")
+        lines.append("")
+        lines.append(_SEP)
+
+        # ── Price block ───────────────────────────────────────────────────────
+        saving = offer.original_price - offer.current_price
+        lines += [
+            f"💰 Precio habitual:  ${offer.original_price:>10,.0f} MXN",
+            f"🔥 *Precio oferta:   ${offer.current_price:>10,.0f} MXN*",
+            f"💸 *Ahorras:         ${saving:>10,.0f} MXN  ({offer.discount_pct:.0f}%)*",
+            _SEP,
             "",
-            f"*{product.name}*",
-            "",
-            f"💰 *Antes:* ${offer.original_price:,.0f}",
-            f"🔥 *Ahora:* ${offer.current_price:,.0f}",
-            f"📉 *Descuento:* {offer.discount_pct:.0f}%",
-            "",
-            f"🏬 *Tienda:* {product.store.replace('_', ' ').title()}",
         ]
 
-        # Price trend indicator
+        # ── Signals ───────────────────────────────────────────────────────────
+        signals: list[str] = []
+
+        # Price trend
         if db is not None:
             trend = get_price_trend(db, product.id)
             emoji = trend_emoji(trend)
             if emoji:
-                trend_label = {
-                    "up": "subiendo",
-                    "down": "bajando",
-                    "flat": "estable",
-                }.get(trend or "", "")
-                lines.append(f"{emoji} *Tendencia de precio:* {trend_label}")
+                label_map = {"up": "subiendo", "down": "bajando", "flat": "estable"}
+                signals.append(f"{emoji} Precio {label_map.get(trend or '', '')}")
 
         if offer.rapid_drop:
-            lines.append("⚡ *¡Caída rápida de precio!*")
+            signals.append("⚡ ¡Caída rápida de precio!")
 
-        # Coupon code
-        if product.coupon_code:
-            lines.append(f"🎟 *Cupón:* `{product.coupon_code}`")
+        # Viral potential
+        raw_vscore = getattr(offer, "viral_score", 0)
+        vscore = raw_vscore if isinstance(raw_vscore, int) else 0
+        vlabel = viral_label(vscore)
+        if vlabel:
+            signals.append(f"🚀 Potencial viral: {vlabel}")
 
+        # Resale opportunity
+        raw_rscore = getattr(offer, "resale_score", 0)
+        rscore = raw_rscore if isinstance(raw_rscore, int) else 0
+        if rscore >= 5:
+            signals.append("🔄 Oportunidad de reventa detectada")
+
+        # Score / quality badge
         score_label = OfferScorer.classify_score(offer.score)
-        lines.append(f"⭐ *Score:* {offer.score}/100 ({score_label})")
-        lines.append("")
-        lines.append(f"[🛒 Comprar aquí]({url})")
+        signals.append(f"⭐ Score: {offer.score}/100  ·  {score_label}")
 
-        # Cross-store price comparison
+        # Coupon
+        if product.coupon_code:
+            signals.append(f"🎟 Cupón: `{product.coupon_code}`")
+
+        if signals:
+            lines += signals
+            lines.append("")
+
+        # ── CTA button ────────────────────────────────────────────────────────
+        lines.append(f"[🛒  *¡Comprar ahora →*]({url})")
+
+        # ── Cross-store comparison ────────────────────────────────────────────
         if db is not None:
             comparison = compare_across_stores(db, product)
             if comparison and comparison.better_deal_exists:
-                lines.append("")
-                lines.append("🔍 *Comparativa de precios:*")
+                lines += [
+                    "",
+                    "🔍 *Comparativa de precios:*",
+                ]
                 for alt in comparison.alternatives[:3]:
                     marker = "✅" if abs(alt["price"] - comparison.cheapest_price) < 0.01 else "  "
                     lines.append(
                         f"{marker} [{alt['store']}]({alt['url']}) — "
-                        f"${alt['price']:,.0f}"
+                        f"${alt['price']:,.0f} MXN"
                     )
                 lines.append(
                     f"\n💡 *Más barato en {comparison.cheapest_store}:* "
-                    f"${comparison.cheapest_price:,.0f}"
+                    f"${comparison.cheapest_price:,.0f} MXN"
                 )
+
+        lines += ["", "_⚠️ Solo por tiempo limitado — precios sujetos a cambio_"]
 
         return "\n".join(lines)
 
@@ -163,9 +201,9 @@ class TelegramPublisher:
 
 def _offer_label(offer_type: OfferType) -> str:
     mapping = {
-        OfferType.PRICE_ERROR: "🚨 ERROR DE PRECIO DETECTADO",
-        OfferType.EXCELLENT: "🔥 OFERTA EXCELENTE",
-        OfferType.GOOD: "✅ BUENA OFERTA",
-        OfferType.REGULAR: "ℹ️ OFERTA DETECTADA",
+        OfferType.PRICE_ERROR: "🚨🚨 *ERROR DE PRECIO DETECTADO* 🚨🚨",
+        OfferType.EXCELLENT: "🔥🔥 *OFERTA EXCELENTE* 🔥🔥",
+        OfferType.GOOD: "✅ *BUENA OFERTA*",
+        OfferType.REGULAR: "ℹ️ *OFERTA DETECTADA*",
     }
-    return mapping.get(offer_type, "🔥 OFERTA DETECTADA")
+    return mapping.get(offer_type, "🔥 *OFERTA DETECTADA*")

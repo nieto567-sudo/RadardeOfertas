@@ -128,4 +128,9 @@ app.conf.beat_schedule = {
         "task": "tasks.publish_daily_digest",
         "schedule": crontab(hour=DIGEST_HOUR_UTC, minute=DIGEST_MINUTE_UTC),
     },
+    # ── Pending offer publisher (every 10 min during smart hours) ─────────────
+    "publish-pending-offers": {
+        "task": "tasks.publish_pending_offers",
+        "schedule": 600,  # every 10 minutes
+    },
 }

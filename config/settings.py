@@ -119,3 +119,28 @@ DIGEST_TOP_N: int = int(os.getenv("DIGEST_TOP_N", "10"))
 # ── Price trend ───────────────────────────────────────────────────────────────
 # Minimum observations needed to calculate a price trend.
 TREND_MIN_POINTS: int = int(os.getenv("TREND_MIN_POINTS", "5"))
+
+# ── Publication cap ───────────────────────────────────────────────────────────
+# Maximum number of individual offers published to the channel per 24-hour day.
+# Range: 10–20 (as specified).
+MAX_DAILY_PUBLICATIONS: int = int(os.getenv("MAX_DAILY_PUBLICATIONS", "15"))
+
+# Maximum minutes after detection before an un-published offer expires.
+# Offers that are still PENDING after this window are discarded.
+PUBLICATION_WINDOW_MINUTES: int = int(os.getenv("PUBLICATION_WINDOW_MINUTES", "30"))
+
+# ── Quality filter ────────────────────────────────────────────────────────────
+# Minimum discount percentage for an offer to pass the quality filter.
+MIN_DISCOUNT_PCT: float = float(os.getenv("MIN_DISCOUNT_PCT", "20.0"))
+# Minimum absolute saving in MXN (filters cheap products with tiny savings).
+MIN_ABSOLUTE_SAVING_MXN: float = float(os.getenv("MIN_ABSOLUTE_SAVING_MXN", "100.0"))
+
+# ── Smart publishing hours (Mexico City time, UTC-6) ─────────────────────────
+# Only publish during peak engagement windows.  Set to false to publish 24/7.
+SMART_HOURS_ENABLED: bool = os.getenv("SMART_HOURS_ENABLED", "true").lower() == "true"
+SMART_HOURS_MORNING_START: int = int(os.getenv("SMART_HOURS_MORNING_START", "7"))
+SMART_HOURS_MORNING_END: int = int(os.getenv("SMART_HOURS_MORNING_END", "10"))
+SMART_HOURS_AFTERNOON_START: int = int(os.getenv("SMART_HOURS_AFTERNOON_START", "12"))
+SMART_HOURS_AFTERNOON_END: int = int(os.getenv("SMART_HOURS_AFTERNOON_END", "15"))
+SMART_HOURS_EVENING_START: int = int(os.getenv("SMART_HOURS_EVENING_START", "19"))
+SMART_HOURS_EVENING_END: int = int(os.getenv("SMART_HOURS_EVENING_END", "23"))
