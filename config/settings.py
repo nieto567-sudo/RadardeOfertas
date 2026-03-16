@@ -1,0 +1,152 @@
+"""
+Application settings loaded from environment variables.
+"""
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+# ── Database ────────────────────────────────────────────────────────────────
+DATABASE_URL: str = os.getenv(
+    "DATABASE_URL",
+    "postgresql://radar:radar@localhost:5432/radardeofertas",
+)
+
+# ── Redis / Celery ───────────────────────────────────────────────────────────
+REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", REDIS_URL)
+CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL)
+
+# ── Telegram ─────────────────────────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "")
+
+# ── Affiliate tags ────────────────────────────────────────────────────────────
+AMAZON_AFFILIATE_TAG: str = os.getenv("AMAZON_AFFILIATE_TAG", "")
+MERCADOLIBRE_AFFILIATE_ID: str = os.getenv("MERCADOLIBRE_AFFILIATE_ID", "")
+ALIEXPRESS_AFFILIATE_KEY: str = os.getenv("ALIEXPRESS_AFFILIATE_KEY", "")
+EBAY_CAMPAIGN_ID: str = os.getenv("EBAY_CAMPAIGN_ID", "")
+
+# Admitad – affiliate network covering Walmart MX, Liverpool, Coppel,
+# Costco, Sam's Club, Soriana, Office Depot/Max, and many more.
+# Sign up at: https://www.admitad.com/en/publisher/
+ADMITAD_PUBLISHER_ID: str = os.getenv("ADMITAD_PUBLISHER_ID", "")
+# JSON dict mapping store_name → Admitad campaign site-ID for that store.
+# Example env value:  '{"walmart":"abc123","liverpool":"def456"}'
+# Find the site ID for each store inside your Admitad publisher dashboard.
+import json as _json  # local import to avoid polluting namespace
+
+_ADMITAD_SITE_IDS_RAW: str = os.getenv("ADMITAD_SITE_IDS", "{}")
+try:
+    ADMITAD_SITE_IDS: dict = _json.loads(_ADMITAD_SITE_IDS_RAW)
+except Exception:
+    ADMITAD_SITE_IDS: dict = {}
+
+# Bitly – URL shortener that also tracks click counts.
+# Sign up at: https://bitly.com  (free: 1 000 links/month)
+BITLY_API_TOKEN: str = os.getenv("BITLY_API_TOKEN", "")
+BITLY_GROUP_GUID: str = os.getenv("BITLY_GROUP_GUID", "")
+
+# UTM campaign name appended to all affiliate/tracked links.
+UTM_SOURCE: str = os.getenv("UTM_SOURCE", "radardeofertas")
+UTM_MEDIUM: str = os.getenv("UTM_MEDIUM", "telegram")
+UTM_CAMPAIGN: str = os.getenv("UTM_CAMPAIGN", "oferta")
+
+# ── Offer detection thresholds ────────────────────────────────────────────────
+# Percentage of average price below which an offer is classified.
+PRICE_ERROR_THRESHOLD: float = float(os.getenv("PRICE_ERROR_THRESHOLD", "0.40"))
+OFFER_EXCELLENT_THRESHOLD: float = float(os.getenv("OFFER_EXCELLENT_THRESHOLD", "0.60"))
+OFFER_GOOD_THRESHOLD: float = float(os.getenv("OFFER_GOOD_THRESHOLD", "0.80"))
+
+# Rapid price-drop: minimum percentage drop within the look-back window.
+RAPID_DROP_THRESHOLD: float = float(os.getenv("RAPID_DROP_THRESHOLD", "0.30"))
+# Hours to look back when checking for rapid drops.
+RAPID_DROP_WINDOW_HOURS: int = int(os.getenv("RAPID_DROP_WINDOW_HOURS", "2"))
+
+# Minimum score (0–100) required before an offer is published to Telegram.
+MIN_PUBLISH_SCORE: int = int(os.getenv("MIN_PUBLISH_SCORE", "60"))
+
+# ── Scraping ──────────────────────────────────────────────────────────────────
+REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "30"))
+REQUEST_DELAY_SECONDS: float = float(os.getenv("REQUEST_DELAY_SECONDS", "1.5"))
+USER_AGENT: str = os.getenv(
+    "USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36",
+)
+
+# ── Worker schedules (seconds between runs) ───────────────────────────────────
+SCHEDULE_AMAZON_SECONDS: int = int(os.getenv("SCHEDULE_AMAZON_SECONDS", "300"))
+SCHEDULE_MERCADOLIBRE_SECONDS: int = int(
+    os.getenv("SCHEDULE_MERCADOLIBRE_SECONDS", "300")
+)
+SCHEDULE_WALMART_SECONDS: int = int(os.getenv("SCHEDULE_WALMART_SECONDS", "600"))
+SCHEDULE_LIVERPOOL_SECONDS: int = int(os.getenv("SCHEDULE_LIVERPOOL_SECONDS", "600"))
+SCHEDULE_BODEGAAURRERA_SECONDS: int = int(
+    os.getenv("SCHEDULE_BODEGAAURRERA_SECONDS", "600")
+)
+SCHEDULE_DEFAULT_SECONDS: int = int(os.getenv("SCHEDULE_DEFAULT_SECONDS", "900"))
+
+# ── Anti-spam cooldown ────────────────────────────────────────────────────────
+# Hours that must pass before the same product can be published again.
+PUBLICATION_COOLDOWN_HOURS: int = int(os.getenv("PUBLICATION_COOLDOWN_HOURS", "6"))
+
+# ── Scraper health monitoring ─────────────────────────────────────────────────
+# Number of consecutive failures before an admin alert is sent.
+SCRAPER_FAILURE_ALERT_THRESHOLD: int = int(
+    os.getenv("SCRAPER_FAILURE_ALERT_THRESHOLD", "3")
+)
+# Telegram chat_id (user or group) that receives admin/health alerts.
+TELEGRAM_ADMIN_CHAT_ID: str = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
+
+# ── Cross-store price comparison ──────────────────────────────────────────────
+# Minimum number of shared significant words to consider two product names the same.
+PRICE_COMPARISON_MIN_WORDS: int = int(os.getenv("PRICE_COMPARISON_MIN_WORDS", "3"))
+
+# ── Price chart ───────────────────────────────────────────────────────────────
+# Minimum number of price observations before generating a chart.
+CHART_MIN_DATA_POINTS: int = int(os.getenv("CHART_MIN_DATA_POINTS", "5"))
+
+# ── Daily digest ─────────────────────────────────────────────────────────────
+# Hour (UTC) at which the daily deal digest is published to the channel.
+DIGEST_HOUR_UTC: int = int(os.getenv("DIGEST_HOUR_UTC", "16"))  # 16 UTC = 10 AM Mexico City
+DIGEST_MINUTE_UTC: int = int(os.getenv("DIGEST_MINUTE_UTC", "0"))
+# Number of top offers included in the daily digest.
+DIGEST_TOP_N: int = int(os.getenv("DIGEST_TOP_N", "10"))
+
+# ── Price trend ───────────────────────────────────────────────────────────────
+# Minimum observations needed to calculate a price trend.
+TREND_MIN_POINTS: int = int(os.getenv("TREND_MIN_POINTS", "5"))
+
+# ── Publication cap ───────────────────────────────────────────────────────────
+# Maximum number of individual offers published to the channel per 24-hour day.
+# Range: 10–20 (as specified).
+MAX_DAILY_PUBLICATIONS: int = int(os.getenv("MAX_DAILY_PUBLICATIONS", "15"))
+
+# Maximum minutes after detection before an un-published offer expires.
+# Offers that are still PENDING after this window are discarded.
+PUBLICATION_WINDOW_MINUTES: int = int(os.getenv("PUBLICATION_WINDOW_MINUTES", "30"))
+
+# ── Quality filter ────────────────────────────────────────────────────────────
+# Minimum discount percentage for an offer to pass the quality filter.
+MIN_DISCOUNT_PCT: float = float(os.getenv("MIN_DISCOUNT_PCT", "20.0"))
+# Minimum absolute saving in MXN (filters cheap products with tiny savings).
+MIN_ABSOLUTE_SAVING_MXN: float = float(os.getenv("MIN_ABSOLUTE_SAVING_MXN", "100.0"))
+
+# ── Smart publishing hours (Mexico City time, UTC-6) ─────────────────────────
+# Only publish during peak engagement windows.  Set to false to publish 24/7.
+SMART_HOURS_ENABLED: bool = os.getenv("SMART_HOURS_ENABLED", "true").lower() == "true"
+SMART_HOURS_MORNING_START: int = int(os.getenv("SMART_HOURS_MORNING_START", "7"))
+SMART_HOURS_MORNING_END: int = int(os.getenv("SMART_HOURS_MORNING_END", "10"))
+SMART_HOURS_AFTERNOON_START: int = int(os.getenv("SMART_HOURS_AFTERNOON_START", "12"))
+SMART_HOURS_AFTERNOON_END: int = int(os.getenv("SMART_HOURS_AFTERNOON_END", "15"))
+SMART_HOURS_EVENING_START: int = int(os.getenv("SMART_HOURS_EVENING_START", "19"))
+SMART_HOURS_EVENING_END: int = int(os.getenv("SMART_HOURS_EVENING_END", "23"))
+
+# ── Weekly summary ────────────────────────────────────────────────────────────
+# Day of the week (0=Mon … 6=Sun) and UTC hour to publish the weekly summary.
+WEEKLY_SUMMARY_DOW: int = int(os.getenv("WEEKLY_SUMMARY_DOW", "6"))  # Sunday
+WEEKLY_SUMMARY_HOUR_UTC: int = int(os.getenv("WEEKLY_SUMMARY_HOUR_UTC", "15"))  # 9 AM MX
+WEEKLY_SUMMARY_MINUTE_UTC: int = int(os.getenv("WEEKLY_SUMMARY_MINUTE_UTC", "0"))
