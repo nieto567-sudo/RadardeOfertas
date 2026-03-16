@@ -214,3 +214,36 @@ class UserSubscription(Base):
             f"<UserSubscription chat_id={self.chat_id} "
             f"keyword={self.keyword!r} active={self.active}>"
         )
+
+
+class RevenueRecord(Base):
+    """
+    Estimated affiliate revenue for one published offer.
+
+    Values are *estimates* based on typical commission rates.  Actual
+    earnings depend on real conversions in each affiliate dashboard.
+    """
+
+    __tablename__ = "revenue_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    offer_id = Column(
+        Integer, ForeignKey("offers.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    store = Column(String(64), nullable=False)
+    affiliate_network = Column(String(64), nullable=True)   # "amazon", "admitad", etc.
+    product_price = Column(Float, nullable=False)
+    commission_rate = Column(Float, nullable=False)          # 0.04 = 4 %
+    estimated_commission_mxn = Column(Float, nullable=False)
+    short_url = Column(Text, nullable=True)                 # Bitly short link
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    offer = relationship("Offer")
+
+    __table_args__ = (Index("ix_revenue_created", "created_at"),)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<RevenueRecord offer_id={self.offer_id} "
+            f"store={self.store!r} estimated={self.estimated_commission_mxn:.2f}>"
+        )

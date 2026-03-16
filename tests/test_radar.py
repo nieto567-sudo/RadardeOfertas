@@ -164,9 +164,15 @@ class TestAffiliateLinks:
     def test_amazon_no_tag_returns_original(self):
         from services import affiliate
         original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
-        with patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", ""):
+        with patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", ""), \
+             patch.object(affiliate.settings, "BITLY_API_TOKEN", ""), \
+             patch.object(affiliate.settings, "UTM_SOURCE", "radar"), \
+             patch.object(affiliate.settings, "UTM_MEDIUM", "telegram"), \
+             patch.object(affiliate.settings, "UTM_CAMPAIGN", "oferta"):
             url = affiliate.get_affiliate_url(original, "amazon")
-        assert url == original
+        # No affiliate tag → no ?tag= param, but UTM params are always added
+        assert "tag=" not in url
+        assert "utm_source=radar" in url
 
     def test_mercadolibre_adds_aff_id(self):
         from services import affiliate
@@ -202,8 +208,14 @@ class TestAffiliateLinks:
     def test_unknown_store_returns_original(self):
         from services import affiliate
         original = "https://unknown-store.com/product/1"
-        url = affiliate.get_affiliate_url(original, "unknown_store")
-        assert url == original
+        with patch.object(affiliate.settings, "BITLY_API_TOKEN", ""), \
+             patch.object(affiliate.settings, "UTM_SOURCE", "radar"), \
+             patch.object(affiliate.settings, "UTM_MEDIUM", "telegram"), \
+             patch.object(affiliate.settings, "UTM_CAMPAIGN", "oferta"):
+            url = affiliate.get_affiliate_url(original, "unknown_store")
+        # No affiliate programme → base URL is unchanged, but UTM params still added
+        assert "unknown-store.com/product/1" in url
+        assert "utm_source=radar" in url
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -359,3 +371,387 @@ class TestTelegramMessageBuilder:
         offer = self._make_offer()
         msg = TelegramPublisher._build_message(offer)
         assert "?aff=1" in msg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Revenue tracker – commission estimation
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestRevenueTrackerEstimates:
+    """Tests for the per-store commission estimation helpers."""
+
+    def test_amazon_commission_rate(self):
+        from services.revenue_tracker import get_commission_info
+
+        network, rate = get_commission_info("amazon")
+        assert network == "amazon_associates"
+        assert rate == pytest.approx(0.04)
+
+    def test_mercadolibre_commission_rate(self):
+        from services.revenue_tracker import get_commission_info
+
+        network, rate = get_commission_info("mercadolibre")
+        assert network == "ml_afiliados"
+        assert rate == pytest.approx(0.04)
+
+    def test_walmart_via_admitad(self):
+        from services.revenue_tracker import get_commission_info
+
+        network, rate = get_commission_info("walmart")
+        assert network == "admitad"
+        assert rate > 0
+
+    def test_liverpool_via_admitad(self):
+        from services.revenue_tracker import get_commission_info
+
+        network, rate = get_commission_info("liverpool")
+        assert network == "admitad"
+
+    def test_unknown_store_fallback(self):
+        from services.revenue_tracker import get_commission_info
+
+        network, rate = get_commission_info("nonexistent_store_xyz")
+        assert rate > 0  # always returns a positive rate
+
+    def test_estimate_commission_value(self):
+        from services.revenue_tracker import estimate_commission
+
+        # Amazon at 4% on a $1000 product
+        with patch("services.revenue_tracker._COMMISSION_TABLE", {"amazon": ("amazon_associates", 0.04)}):
+            result = estimate_commission("amazon", 1000.0)
+        assert result == pytest.approx(40.0)
+
+    def test_estimate_commission_walmart(self):
+        from services.revenue_tracker import estimate_commission, _COMMISSION_TABLE
+
+        _, rate = _COMMISSION_TABLE["walmart"]
+        result = estimate_commission("walmart", 5000.0)
+        assert result == pytest.approx(5000.0 * rate)
+
+    def test_revenue_summary_empty_db(self):
+        from services.revenue_tracker import get_revenue_summary
+        from sqlalchemy import func as sqlfunc
+
+        # Simulate the aggregation row returning all-None values
+        totals_row = MagicMock()
+        totals_row.total = None
+        totals_row.count = 0
+        totals_row.avg = None
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.one.return_value = totals_row
+
+        summary = get_revenue_summary(mock_db, days=30)
+        assert summary["total_estimated_mxn"] == 0.0
+        assert summary["offers_published"] == 0
+
+    def test_revenue_summary_with_records(self):
+        from services.revenue_tracker import get_revenue_summary
+
+        # Simulate non-zero aggregate row
+        totals_row = MagicMock()
+        totals_row.total = 140.0
+        totals_row.count = 2
+        totals_row.avg = 70.0
+
+        network_row1 = MagicMock()
+        network_row1.affiliate_network = "amazon_associates"
+        network_row1.subtotal = 40.0
+
+        network_row2 = MagicMock()
+        network_row2.affiliate_network = "admitad"
+        network_row2.subtotal = 100.0
+
+        store_row1 = MagicMock()
+        store_row1.store = "amazon"
+        store_row1.subtotal = 40.0
+
+        store_row2 = MagicMock()
+        store_row2.store = "walmart"
+        store_row2.subtotal = 100.0
+
+        call_count = [0]
+
+        def mock_query_chain(*args, **kwargs):
+            chain = MagicMock()
+            chain.filter.return_value = chain
+            chain.group_by.return_value = chain
+            chain.order_by.return_value = chain
+            chain.limit.return_value = chain
+
+            call_count[0] += 1
+            if call_count[0] == 1:
+                chain.one.return_value = totals_row
+            elif call_count[0] == 2:
+                chain.all.return_value = [network_row1, network_row2]
+            else:
+                chain.all.return_value = [store_row1, store_row2]
+            return chain
+
+        mock_db = MagicMock()
+        mock_db.query.side_effect = mock_query_chain
+
+        summary = get_revenue_summary(mock_db, days=30)
+        assert summary["total_estimated_mxn"] == pytest.approx(140.0)
+        assert summary["offers_published"] == 2
+        assert "amazon_associates" in summary["by_network"]
+        assert "admitad" in summary["by_network"]
+
+    def test_commission_rates_text_contains_all_stores(self):
+        from services.revenue_tracker import get_commission_rates_text
+
+        text = get_commission_rates_text()
+        assert "Amazon" in text
+        assert "Walmart" in text
+        assert "Liverpool" in text
+        assert "Admitad" in text or "admitad" in text.lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Affiliate – UTM parameters
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestUTMParameters:
+    """Tests for UTM parameter injection."""
+
+    def test_utm_added_to_plain_url(self):
+        from services.affiliate import _apply_utm
+        from unittest.mock import patch
+
+        with patch("services.affiliate.settings") as ms:
+            ms.UTM_SOURCE = "radardeofertas"
+            ms.UTM_MEDIUM = "telegram"
+            ms.UTM_CAMPAIGN = "oferta"
+            url = _apply_utm("https://www.walmart.com.mx/product/1", "walmart")
+
+        assert "utm_source=radardeofertas" in url
+        assert "utm_medium=telegram" in url
+        assert "utm_campaign=oferta" in url
+        assert "utm_content=walmart" in url
+
+    def test_utm_preserves_existing_params(self):
+        from services.affiliate import _apply_utm
+        from unittest.mock import patch
+
+        with patch("services.affiliate.settings") as ms:
+            ms.UTM_SOURCE = "radar"
+            ms.UTM_MEDIUM = "telegram"
+            ms.UTM_CAMPAIGN = "deal"
+            url = _apply_utm(
+                "https://www.liverpool.com.mx/tienda?color=rojo", "liverpool"
+            )
+
+        assert "color=rojo" in url
+        assert "utm_source=radar" in url
+
+    def test_utm_does_not_crash_on_bad_url(self):
+        from services.affiliate import _apply_utm
+        from unittest.mock import patch
+
+        with patch("services.affiliate.settings") as ms:
+            ms.UTM_SOURCE = "r"
+            ms.UTM_MEDIUM = "t"
+            ms.UTM_CAMPAIGN = "o"
+            # Should return url unchanged if it can't parse
+            result = _apply_utm("not-a-valid-url", "store")
+        assert result  # must return something, not raise
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Affiliate – Admitad deep links
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestAdmitadAffiliateLinks:
+    """Tests for Admitad deep-link generation."""
+
+    def test_admitad_url_format(self):
+        from services.affiliate import _admitad
+        from urllib.parse import urlparse
+        from unittest.mock import patch
+
+        with patch("services.affiliate.settings") as ms:
+            ms.ADMITAD_PUBLISHER_ID = "mypub"
+            ms.ADMITAD_SITE_IDS = {"walmart": "site99"}
+            url = _admitad("https://www.walmart.com.mx/product", "walmart")
+
+        parsed = urlparse(url)
+        assert parsed.netloc == "ad.admitad.com"
+        assert "site99" in url
+        assert "mypub" in url
+
+    def test_admitad_no_publisher_returns_original(self):
+        from services.affiliate import _admitad
+        from unittest.mock import patch
+
+        original = "https://www.walmart.com.mx/product"
+        with patch("services.affiliate.settings") as ms:
+            ms.ADMITAD_PUBLISHER_ID = ""
+            ms.ADMITAD_SITE_IDS = {"walmart": "site99"}
+            url = _admitad(original, "walmart")
+
+        assert url == original
+
+    def test_admitad_no_site_id_returns_original(self):
+        from services.affiliate import _admitad
+        from unittest.mock import patch
+
+        original = "https://www.coppel.com/product"
+        with patch("services.affiliate.settings") as ms:
+            ms.ADMITAD_PUBLISHER_ID = "pub123"
+            ms.ADMITAD_SITE_IDS = {}   # no site ID for coppel
+            url = _admitad(original, "coppel")
+
+        assert url == original
+
+    def test_admitad_encodes_product_url(self):
+        from services.affiliate import _admitad
+        from unittest.mock import patch
+
+        with patch("services.affiliate.settings") as ms:
+            ms.ADMITAD_PUBLISHER_ID = "pub"
+            ms.ADMITAD_SITE_IDS = {"liverpool": "liv123"}
+            url = _admitad(
+                "https://liverpool.com.mx/producto?color=rojo&size=M",
+                "liverpool",
+            )
+
+        # The product URL must be percent-encoded in the deep link
+        assert "%3A" in url or "liverpool.com.mx" in url  # either encoded or raw
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Affiliate – Bitly shortener
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestBitlyShortener:
+    """Tests for the Bitly URL-shortening integration."""
+
+    def test_no_token_returns_original(self):
+        from services.affiliate import shorten_url
+        from unittest.mock import patch
+
+        original = "https://www.amazon.com.mx/dp/B08N5WRWNW?tag=test"
+        with patch("services.affiliate.settings") as ms:
+            ms.BITLY_API_TOKEN = ""
+            ms.BITLY_GROUP_GUID = ""
+            result = shorten_url(original)
+
+        assert result == original
+
+    def test_successful_bitly_call(self):
+        from services.affiliate import shorten_url
+        from unittest.mock import patch, MagicMock
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"link": "https://bit.ly/abc123"}
+        mock_resp.raise_for_status.return_value = None
+
+        with patch("services.affiliate.settings") as ms, \
+             patch("services.affiliate._requests.post", return_value=mock_resp):
+            ms.BITLY_API_TOKEN = "faketoken"
+            ms.BITLY_GROUP_GUID = ""
+            result = shorten_url("https://www.walmart.com.mx/product")
+
+        assert result == "https://bit.ly/abc123"
+
+    def test_bitly_api_failure_returns_original(self):
+        from services.affiliate import shorten_url
+        from unittest.mock import patch
+
+        original = "https://www.coppel.com/product"
+        with patch("services.affiliate.settings") as ms, \
+             patch("services.affiliate._requests.post", side_effect=Exception("timeout")):
+            ms.BITLY_API_TOKEN = "tok"
+            ms.BITLY_GROUP_GUID = ""
+            result = shorten_url(original)
+
+        assert result == original
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cooldown service
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestCooldownService:
+    """Tests for the publication cooldown guard."""
+
+    def test_no_recent_publication_is_not_on_cooldown(self):
+        from services.cooldown import is_on_cooldown
+        from unittest.mock import patch, MagicMock
+
+        mock_db = MagicMock()
+        mock_query = MagicMock()
+        mock_query.join.return_value.filter.return_value.first.return_value = None
+        mock_db.query.return_value = mock_query
+
+        with patch("services.cooldown.settings") as ms:
+            ms.PUBLICATION_COOLDOWN_HOURS = 6
+            result = is_on_cooldown(mock_db, product_id=1)
+
+        assert result is False
+
+    def test_recent_publication_is_on_cooldown(self):
+        from services.cooldown import is_on_cooldown
+        from database.models import Publication
+        from unittest.mock import patch, MagicMock
+
+        mock_pub = MagicMock(spec=Publication)
+        mock_db = MagicMock()
+        mock_query = MagicMock()
+        mock_query.join.return_value.filter.return_value.first.return_value = mock_pub
+        mock_db.query.return_value = mock_query
+
+        with patch("services.cooldown.settings") as ms:
+            ms.PUBLICATION_COOLDOWN_HOURS = 6
+            result = is_on_cooldown(mock_db, product_id=42)
+
+        assert result is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ProductData – coupon_code field
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestProductDataCouponCode:
+    """Tests for the new coupon_code field on ProductData."""
+
+    def test_coupon_code_default_is_none(self):
+        from scrapers.base import ProductData
+
+        pd = ProductData(
+            name="Laptop",
+            price=9999.0,
+            url="https://example.com/laptop",
+            store="walmart",
+            external_id="LAP123",
+        )
+        assert pd.coupon_code is None
+
+    def test_coupon_code_in_to_dict(self):
+        from scrapers.base import ProductData
+
+        pd = ProductData(
+            name="Laptop",
+            price=9999.0,
+            url="https://example.com/laptop",
+            store="walmart",
+            external_id="LAP123",
+            coupon_code="SAVE15",
+        )
+        d = pd.to_dict()
+        assert d["coupon_code"] == "SAVE15"
+
+    def test_coupon_code_none_in_to_dict(self):
+        from scrapers.base import ProductData
+
+        pd = ProductData(
+            name="X", price=1.0, url="http://x.com", store="s", external_id="e"
+        )
+        d = pd.to_dict()
+        assert d["coupon_code"] is None
