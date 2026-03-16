@@ -50,7 +50,7 @@ RadardeOfertas/
 │   ├── publisher.py         # Envía mensajes/fotos al canal de Telegram
 │   └── bot.py               # Bot con comandos /start y /status
 ├── tests/
-│   └── test_radar.py        # 42 tests unitarios
+│   └── test_radar.py        # 157 tests unitarios
 ├── main.py                  # CLI: init-db | run-once | run-loop
 ├── Dockerfile
 ├── docker-compose.yml
@@ -181,7 +181,7 @@ pip install pytest
 pytest tests/ -v
 ```
 
-104 tests unitarios que cubren: limpieza de precios, clasificación de ofertas, scoring, generación de enlaces de afiliado, scraper manager, formateo de mensajes de Telegram, tendencia de precio, salud de scrapers, suscripciones y resumen diario.
+157 tests unitarios que cubren: limpieza de precios, clasificación de ofertas, scoring, generación de enlaces de afiliado, scraper manager, formateo de mensajes de Telegram, tendencia de precio, salud de scrapers, suscripciones, resumen diario, horas inteligentes de publicación, detector viral, detector de reventa, filtro de calidad, clasificador de productos, seguimiento de clics/compras y límite diario de publicaciones.
 
 ---
 
