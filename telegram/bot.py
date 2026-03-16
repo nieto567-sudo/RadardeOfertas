@@ -322,9 +322,6 @@ def run_bot() -> None:  # pragma: no cover
 
         db = SessionLocal()
         try:
-            for days, label in [(7, "7 días"), (30, "30 días")]:
-                pass  # just to import datetime cleanly
-
             cutoff_7 = datetime.now(tz=timezone.utc) - timedelta(days=7)
             cutoff_30 = datetime.now(tz=timezone.utc) - timedelta(days=30)
 
@@ -473,7 +470,7 @@ def run_bot() -> None:  # pragma: no cover
             for cat, discounts in sorted_cats[:10]:
                 count = len(discounts)
                 avg_disc = sum(discounts) / count
-                lines.append(f"• *{cat}*: {count} oferta{'s' if count > 1 else ''} · {avg_disc:.0f}% prom")
+                lines.append(f"• *{cat}*: {count} oferta{'s' if count > 1 else ''} · promedio {avg_disc:.0f}%")
 
             lines.append("\n_Usa /buscar <producto> para buscar en estas categorías_")
             await update.message.reply_text(

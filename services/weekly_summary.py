@@ -77,8 +77,8 @@ def build_weekly_summary_text(db: Session) -> str | None:
     best_url = best.affiliate_url or best.product.url
     best_saving = best.original_price - best.current_price
 
-    # Date range label
-    week_start = (datetime.now(tz=timezone.utc) - timedelta(days=7)).strftime("%d/%m")
+    # Date range label (consistent dd/mm/YYYY format for both ends)
+    week_start = (datetime.now(tz=timezone.utc) - timedelta(days=7)).strftime("%d/%m/%Y")
     week_end = datetime.now(tz=timezone.utc).strftime("%d/%m/%Y")
 
     lines = [
