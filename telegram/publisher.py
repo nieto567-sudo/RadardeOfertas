@@ -17,8 +17,10 @@ from config import settings
 from database.models import Offer, OfferType, Publication
 from services.offer_scorer import OfferScorer
 from services.price_comparison import compare_across_stores
+from services.price_sparkline import get_sparkline, is_all_time_low
 from services.price_trend import get_price_trend, trend_emoji
 from services.resale_detector import detect_resale_opportunity
+from services.seasonal_events import get_season_banner
 from services.viral_detector import calculate_viral_score, viral_label
 
 logger = logging.getLogger(__name__)
@@ -77,9 +79,15 @@ class TelegramPublisher:
         product = offer.product
         url = offer.affiliate_url or product.url
 
+        # ── Seasonal banner (only during special Mexican shopping events) ─────
+        banner = get_season_banner()
+        lines: list[str] = []
+        if banner:
+            lines += [f"*{banner}*", ""]
+
         # ── Header ────────────────────────────────────────────────────────────
         label = _offer_label(offer.offer_type)
-        lines = [f"{label}", ""]
+        lines += [f"{label}", ""]
 
         # ── Product info ──────────────────────────────────────────────────────
         lines.append(f"*{product.name}*")
@@ -95,9 +103,26 @@ class TelegramPublisher:
             f"💰 Precio habitual:  ${offer.original_price:>10,.0f} MXN",
             f"🔥 *Precio oferta:   ${offer.current_price:>10,.0f} MXN*",
             f"💸 *Ahorras:         ${saving:>10,.0f} MXN  ({offer.discount_pct:.0f}%)*",
-            _SEP,
-            "",
         ]
+
+        # All-time low badge (shown when the current price is the lowest ever)
+        if db is not None:
+            try:
+                if is_all_time_low(db, product.id, offer.current_price):
+                    lines.append("🏆 *¡PRECIO MÍNIMO HISTÓRICO!*")
+            except Exception:  # pylint: disable=broad-except
+                pass
+
+        # Price sparkline
+        if db is not None:
+            try:
+                sparkline = get_sparkline(db, product.id)
+                if sparkline:
+                    lines.append(f"📈 Historial: `{sparkline}`")
+            except Exception:  # pylint: disable=broad-except
+                pass
+
+        lines += [_SEP, ""]
 
         # ── Signals ───────────────────────────────────────────────────────────
         signals: list[str] = []

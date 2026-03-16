@@ -1925,3 +1925,378 @@ class TestDailyPublicationCount:
         db = MagicMock()
         db.query.return_value.filter.return_value.count.return_value = 0
         assert get_daily_publication_count(db) == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Price Sparkline
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestPriceSparkline:
+    """Tests for services.price_sparkline."""
+
+    def _db_with_prices(self, prices: list):
+        """Return a mock DB that yields the given list of prices."""
+        db = MagicMock()
+        rows = [(p,) for p in prices]
+        db.query.return_value.filter.return_value.order_by.return_value.all.return_value = rows
+        db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = rows
+        return db
+
+    def test_returns_none_for_too_few_points(self):
+        from services.price_sparkline import get_sparkline
+        db = self._db_with_prices([100.0, 90.0])  # only 2 < _MIN_POINTS=3
+        assert get_sparkline(db, product_id=1) is None
+
+    def test_returns_string_for_enough_points(self):
+        from services.price_sparkline import get_sparkline
+        db = self._db_with_prices([100.0, 80.0, 60.0, 90.0, 70.0])
+        result = get_sparkline(db, product_id=1)
+        assert result is not None
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_sparkline_uses_block_characters(self):
+        from services.price_sparkline import get_sparkline, _BLOCKS
+        db = self._db_with_prices([100.0, 80.0, 60.0, 40.0, 20.0, 80.0, 100.0])
+        result = get_sparkline(db, product_id=1)
+        assert result is not None
+        for ch in result:
+            assert ch in _BLOCKS
+
+    def test_flat_prices_returns_flat_sparkline(self):
+        from services.price_sparkline import get_sparkline, _BLOCKS
+        db = self._db_with_prices([500.0, 500.0, 500.0, 500.0, 500.0])
+        result = get_sparkline(db, product_id=1)
+        # All blocks should be the same (lowest block for flat line)
+        assert result is not None
+        assert len(set(result)) == 1
+
+    def test_is_all_time_low_true(self):
+        from services.price_sparkline import is_all_time_low
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [
+            (500.0,), (400.0,), (350.0,), (300.0,)
+        ]
+        assert is_all_time_low(db, product_id=1, current_price=300.0) is True
+
+    def test_is_all_time_low_false(self):
+        from services.price_sparkline import is_all_time_low
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [
+            (500.0,), (400.0,), (200.0,), (300.0,)
+        ]
+        assert is_all_time_low(db, product_id=1, current_price=300.0) is False
+
+    def test_is_all_time_low_no_history(self):
+        from services.price_sparkline import is_all_time_low
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = []
+        assert is_all_time_low(db, product_id=1, current_price=100.0) is False
+
+    def test_sparkline_length_capped_at_max(self):
+        from services.price_sparkline import get_sparkline
+        prices = list(range(1, 50))  # 49 points
+        db = self._db_with_prices(prices)
+        result = get_sparkline(db, product_id=1, max_points=14)
+        assert result is not None
+        assert len(result) <= 14
+
+    def test_is_all_time_low_with_tolerance(self):
+        from services.price_sparkline import is_all_time_low
+        # Current price slightly above historical min (within tolerance)
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [
+            (500.0,), (300.0,), (400.0,)
+        ]
+        assert is_all_time_low(db, product_id=1, current_price=300.005) is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Seasonal Events
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestSeasonalEvents:
+    """Tests for services.seasonal_events."""
+
+    def test_buen_fin_detected(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 11, 15)) == "EL BUEN FIN"
+
+    def test_navidad_detected(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 12, 20)) == "NAVIDAD"
+
+    def test_cyber_monday_detected(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 12, 2)) == "CYBER MONDAY"
+
+    def test_hot_sale_detected(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 5, 27)) == "HOT SALE"
+
+    def test_hot_sale_detected_june(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 6, 1)) == "HOT SALE"
+
+    def test_dia_de_madres_detected(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 5, 5)) == "DÍA DE LAS MADRES"
+
+    def test_san_valentin_detected(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 2, 10)) == "SAN VALENTÍN"
+
+    def test_regreso_clases_detected(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 7, 20)) == "REGRESO A CLASES"
+
+    def test_dia_de_muertos_detected(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 10, 30)) == "DÍA DE MUERTOS"
+
+    def test_no_season_returns_none(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 3, 15)) is None
+
+    def test_banner_nonempty_during_season(self):
+        from services.seasonal_events import get_season_banner
+        from datetime import date
+        banner = get_season_banner(date(2024, 11, 15))
+        assert len(banner) > 0
+        assert "BUEN FIN" in banner
+
+    def test_banner_empty_outside_season(self):
+        from services.seasonal_events import get_season_banner
+        from datetime import date
+        assert get_season_banner(date(2024, 3, 15)) == ""
+
+    def test_season_emoji_mapping(self):
+        from services.seasonal_events import get_season_emoji
+        assert get_season_emoji("EL BUEN FIN") == "🛒"
+        assert get_season_emoji("NAVIDAD") == "🎄"
+        assert get_season_emoji("HOT SALE") == "🔥"
+
+    def test_buen_fin_boundary_start(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 11, 14)) == "EL BUEN FIN"
+
+    def test_buen_fin_boundary_end(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 11, 18)) == "EL BUEN FIN"
+
+    def test_buen_fin_before_start(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 11, 13)) is None
+
+    def test_regreso_clases_august(self):
+        from services.seasonal_events import get_current_season
+        from datetime import date
+        assert get_current_season(date(2024, 8, 10)) == "REGRESO A CLASES"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Weekly Summary
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestWeeklySummary:
+    """Tests for services.weekly_summary."""
+
+    def _make_mock_db_with_offers(self, offers):
+        """Return a mock DB whose query chain yields the given offers list."""
+        db = MagicMock()
+        (
+            db.query.return_value
+            .join.return_value
+            .options.return_value
+            .filter.return_value
+            .order_by.return_value
+            .all.return_value
+        ) = offers
+        return db
+
+    def _make_offer(self, name, store, discount, original, current, score=75):
+        o = MagicMock()
+        o.original_price = original
+        o.current_price = current
+        o.discount_pct = discount
+        o.score = score
+        o.affiliate_url = None
+        o.product.name = name
+        o.product.store = store
+        o.product.url = "https://example.com"
+        return o
+
+    def test_returns_none_when_no_offers(self):
+        from services.weekly_summary import build_weekly_summary_text
+        db = self._make_mock_db_with_offers([])
+        assert build_weekly_summary_text(db) is None
+
+    def test_text_contains_total_savings(self):
+        from services.weekly_summary import build_weekly_summary_text
+        offers = [
+            self._make_offer("iPhone 15", "amazon", 30, 20000, 14000),
+            self._make_offer("iPad Air", "amazon", 25, 15000, 11250),
+        ]
+        db = self._make_mock_db_with_offers(offers)
+        text = build_weekly_summary_text(db)
+        assert text is not None
+        assert "ahorro" in text.lower() or "MXN" in text
+
+    def test_text_contains_offer_count(self):
+        from services.weekly_summary import build_weekly_summary_text
+        offers = [self._make_offer("PS5", "walmart", 40, 10000, 6000)]
+        db = self._make_mock_db_with_offers(offers)
+        text = build_weekly_summary_text(db)
+        assert "1" in text
+
+    def test_text_contains_top_store(self):
+        from services.weekly_summary import build_weekly_summary_text
+        offers = [
+            self._make_offer("Product A", "amazon", 30, 1000, 700),
+            self._make_offer("Product B", "amazon", 25, 2000, 1500),
+            self._make_offer("Product C", "walmart", 20, 500, 400),
+        ]
+        db = self._make_mock_db_with_offers(offers)
+        text = build_weekly_summary_text(db)
+        assert "Amazon" in text
+
+    def test_text_contains_best_deal(self):
+        from services.weekly_summary import build_weekly_summary_text
+        best = self._make_offer("Nintendo Switch OLED", "liverpool", 50, 8000, 4000, score=95)
+        offers = [best, self._make_offer("Cable USB", "walmart", 20, 200, 160, score=60)]
+        db = self._make_mock_db_with_offers(offers)
+        text = build_weekly_summary_text(db)
+        assert "Nintendo Switch" in text
+
+    def test_text_contains_share_cta(self):
+        from services.weekly_summary import build_weekly_summary_text
+        offers = [self._make_offer("iPhone 15", "amazon", 30, 20000, 14000)]
+        db = self._make_mock_db_with_offers(offers)
+        text = build_weekly_summary_text(db)
+        # Should include a social share CTA
+        assert "amigos" in text.lower() or "comparte" in text.lower()
+
+    def test_publish_returns_false_without_config(self):
+        from services.weekly_summary import publish_weekly_summary
+        db = MagicMock()
+        with patch("services.weekly_summary.settings") as ms:
+            ms.TELEGRAM_BOT_TOKEN = ""
+            ms.TELEGRAM_CHANNEL_ID = ""
+            result = publish_weekly_summary(db)
+        assert result is False
+
+    def test_text_long_name_truncated(self):
+        from services.weekly_summary import build_weekly_summary_text
+        long_name = "A" * 60
+        offers = [self._make_offer(long_name, "amazon", 30, 1000, 700)]
+        db = self._make_mock_db_with_offers(offers)
+        text = build_weekly_summary_text(db)
+        assert text is not None
+        # The name should be truncated with "…"
+        assert "…" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Publisher message — sparkline + all-time low + seasonal banner
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestPublisherMessageV2:
+    """Tests for the v2 publisher message (sparkline, all-time low, seasonal)."""
+
+    def _make_offer(self, rapid_drop=False, viral_score=0, resale_score=0):
+        offer = MagicMock()
+        from database.models import OfferType
+        offer.offer_type = OfferType.EXCELLENT
+        offer.original_price = 2000.0
+        offer.current_price = 1200.0
+        offer.discount_pct = 40.0
+        offer.score = 80
+        offer.rapid_drop = rapid_drop
+        offer.viral_score = viral_score
+        offer.resale_score = resale_score
+        offer.affiliate_url = "https://example.com"
+        offer.product.name = "Samsung Galaxy S24"
+        offer.product.store = "amazon"
+        offer.product.category = "Celulares y Smartphones"
+        offer.product.coupon_code = None
+        offer.product.image_url = None
+        offer.product.id = 42
+        return offer
+
+    def test_message_includes_separator(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        msg = TelegramPublisher._build_message(offer)
+        assert "━" in msg
+
+    def test_message_includes_category(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        msg = TelegramPublisher._build_message(offer)
+        assert "Celulares" in msg
+
+    def test_all_time_low_badge_shown(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        db = MagicMock()
+        # Mock is_all_time_low → True
+        with patch("telegram.publisher.is_all_time_low", return_value=True), \
+             patch("telegram.publisher.get_sparkline", return_value=None), \
+             patch("telegram.publisher.get_price_trend", return_value=None), \
+             patch("telegram.publisher.compare_across_stores", return_value=None):
+            msg = TelegramPublisher._build_message(offer, db=db)
+        assert "MÍNIMO HISTÓRICO" in msg
+
+    def test_sparkline_shown_when_available(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        db = MagicMock()
+        with patch("telegram.publisher.is_all_time_low", return_value=False), \
+             patch("telegram.publisher.get_sparkline", return_value="▁▂▄▇█"), \
+             patch("telegram.publisher.get_price_trend", return_value=None), \
+             patch("telegram.publisher.compare_across_stores", return_value=None):
+            msg = TelegramPublisher._build_message(offer, db=db)
+        assert "▁▂▄▇█" in msg
+
+    def test_seasonal_banner_shown_during_buen_fin(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        with patch("telegram.publisher.get_season_banner", return_value="🛒 ¡EL BUEN FIN! 🛒"):
+            msg = TelegramPublisher._build_message(offer)
+        assert "BUEN FIN" in msg
+
+    def test_no_seasonal_banner_outside_season(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        with patch("telegram.publisher.get_season_banner", return_value=""):
+            msg = TelegramPublisher._build_message(offer)
+        assert "BUEN FIN" not in msg
+        assert "NAVIDAD" not in msg
+
+    def test_all_time_low_badge_not_shown_when_false(self):
+        from telegram.publisher import TelegramPublisher
+        offer = self._make_offer()
+        db = MagicMock()
+        with patch("telegram.publisher.is_all_time_low", return_value=False), \
+             patch("telegram.publisher.get_sparkline", return_value=None), \
+             patch("telegram.publisher.get_price_trend", return_value=None), \
+             patch("telegram.publisher.compare_across_stores", return_value=None):
+            msg = TelegramPublisher._build_message(offer, db=db)
+        assert "MÍNIMO HISTÓRICO" not in msg

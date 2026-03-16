@@ -144,3 +144,9 @@ SMART_HOURS_AFTERNOON_START: int = int(os.getenv("SMART_HOURS_AFTERNOON_START", 
 SMART_HOURS_AFTERNOON_END: int = int(os.getenv("SMART_HOURS_AFTERNOON_END", "15"))
 SMART_HOURS_EVENING_START: int = int(os.getenv("SMART_HOURS_EVENING_START", "19"))
 SMART_HOURS_EVENING_END: int = int(os.getenv("SMART_HOURS_EVENING_END", "23"))
+
+# ── Weekly summary ────────────────────────────────────────────────────────────
+# Day of the week (0=Mon … 6=Sun) and UTC hour to publish the weekly summary.
+WEEKLY_SUMMARY_DOW: int = int(os.getenv("WEEKLY_SUMMARY_DOW", "6"))  # Sunday
+WEEKLY_SUMMARY_HOUR_UTC: int = int(os.getenv("WEEKLY_SUMMARY_HOUR_UTC", "15"))  # 9 AM MX
+WEEKLY_SUMMARY_MINUTE_UTC: int = int(os.getenv("WEEKLY_SUMMARY_MINUTE_UTC", "0"))

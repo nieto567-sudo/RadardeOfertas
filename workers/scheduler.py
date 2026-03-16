@@ -15,6 +15,9 @@ from config.settings import (
     SCHEDULE_LIVERPOOL_SECONDS,
     SCHEDULE_BODEGAAURRERA_SECONDS,
     SCHEDULE_DEFAULT_SECONDS,
+    WEEKLY_SUMMARY_DOW,
+    WEEKLY_SUMMARY_HOUR_UTC,
+    WEEKLY_SUMMARY_MINUTE_UTC,
 )
 from workers.celery_app import app
 
@@ -132,5 +135,14 @@ app.conf.beat_schedule = {
     "publish-pending-offers": {
         "task": "tasks.publish_pending_offers",
         "schedule": 600,  # every 10 minutes
+    },
+    # ── Weekly savings summary (every Sunday at 9 AM Mexico City time) ────────
+    "weekly-summary": {
+        "task": "tasks.publish_weekly_summary",
+        "schedule": crontab(
+            hour=WEEKLY_SUMMARY_HOUR_UTC,
+            minute=WEEKLY_SUMMARY_MINUTE_UTC,
+            day_of_week=WEEKLY_SUMMARY_DOW,
+        ),
     },
 }

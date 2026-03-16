@@ -8,6 +8,9 @@ Starts a simple polling bot that responds to:
   /comisiones   – commission rate table per store
   /ranking      – top offers right now ranked by score + viral potential
   /estadisticas – click/purchase analytics
+  /ahorro       – community total savings (social proof)
+  /buscar       – search active deals for a keyword (/buscar iphone)
+  /categorias   – deal count per category
   /seguir       – subscribe to keyword alerts  (/seguir iphone)
   /dejar        – unsubscribe from keyword      (/dejar iphone)
   /mis_alertas  – list all active subscriptions
@@ -40,17 +43,21 @@ def run_bot() -> None:  # pragma: no cover
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
             "👋 Bienvenido a *RadardeOfertas*\\!\n\n"
-            "Este bot publica automáticamente las mejores ofertas detectadas en "
-            "tiendas de México y el mundo\\.\n\n"
-            "Comandos disponibles:\n"
+            "Detectamos y publicamos automáticamente las *mejores ofertas* de "
+            "tiendas de México y el mundo — ¡solo lo que realmente vale la pena\\!\n\n"
+            "📌 *Comandos disponibles:*\n"
             "/status – estadísticas del sistema\n"
-            "/ranking – top ofertas actuales\n"
+            "/ranking – top ofertas últimas 24 h\n"
+            "/buscar \\<producto\\> – buscar ofertas activas\n"
+            "/ahorro – ahorro total de la comunidad\n"
             "/estadisticas – clics, compras y análisis\n"
+            "/categorias – ofertas por categoría\n"
             "/ingresos – resumen de ingresos estimados\n"
             "/comisiones – tasas de comisión por tienda\n"
-            "/seguir \\<palabra\\> – recibe alertas cuando aparezca esa oferta\n"
-            "/dejar \\<palabra\\> – cancela una alerta\n"
-            "/mis\\_alertas – ver tus alertas activas",
+            "/seguir \\<palabra\\> – alerta personalizada de oferta\n"
+            "/dejar \\<palabra\\> – cancelar una alerta\n"
+            "/mis\\_alertas – ver tus alertas activas\n\n"
+            "💡 _Tip: Usa /seguir iphone para recibir alertas cada vez que aparezca una oferta de iphone_",
             parse_mode="MarkdownV2",
         )
 
@@ -307,11 +314,184 @@ def run_bot() -> None:  # pragma: no cover
         finally:
             db.close()
 
+    async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Community total savings stats: /ahorro"""
+        from database.connection import SessionLocal
+        from database.models import Offer, OfferStatus, Publication
+        from datetime import datetime, timedelta, timezone
+
+        db = SessionLocal()
+        try:
+            for days, label in [(7, "7 días"), (30, "30 días")]:
+                pass  # just to import datetime cleanly
+
+            cutoff_7 = datetime.now(tz=timezone.utc) - timedelta(days=7)
+            cutoff_30 = datetime.now(tz=timezone.utc) - timedelta(days=30)
+
+            def _stats(cutoff):
+                offers = (
+                    db.query(Offer)
+                    .join(Publication, Offer.id == Publication.offer_id)
+                    .filter(
+                        Offer.status == OfferStatus.PUBLISHED,
+                        Publication.success.is_(True),
+                        Publication.sent_at >= cutoff,
+                    )
+                    .all()
+                )
+                total_saving = sum(o.original_price - o.current_price for o in offers)
+                return len(offers), total_saving
+
+            count_7, saving_7 = _stats(cutoff_7)
+            count_30, saving_30 = _stats(cutoff_30)
+
+            text = (
+                "💰 *AHORRO DE LA COMUNIDAD*\n\n"
+                "📅 *Últimos 7 días:*\n"
+                f"  🎯 Ofertas: *{count_7:,}*\n"
+                f"  💸 Ahorro total: *${saving_7:,.0f} MXN*\n\n"
+                "📅 *Últimos 30 días:*\n"
+                f"  🎯 Ofertas: *{count_30:,}*\n"
+                f"  💸 Ahorro total: *${saving_30:,.0f} MXN*\n\n"
+                "_¡Comparte el canal con tus amigos para que también ahorren\\! 🤑_"
+            )
+            await update.message.reply_text(
+                text, parse_mode="Markdown", disable_web_page_preview=True
+            )
+        finally:
+            db.close()
+
+    async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Search for active deals: /buscar <producto>"""
+        from database.connection import SessionLocal
+        from database.models import Offer, OfferStatus, Publication
+        from sqlalchemy import desc
+        from sqlalchemy.orm import joinedload
+        from datetime import datetime, timedelta, timezone
+
+        if not context.args:
+            await update.message.reply_text(
+                "🔍 *Búsqueda de ofertas*\n\n"
+                "Uso: /buscar <producto>\n"
+                "Ejemplo: /buscar iphone\n\n"
+                "Buscaré entre las ofertas publicadas en las últimas 24 horas.",
+                parse_mode="Markdown",
+            )
+            return
+
+        keyword = " ".join(context.args).strip().lower()
+        db = SessionLocal()
+        try:
+            cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+            offers = (
+                db.query(Offer)
+                .join(Publication, Offer.id == Publication.offer_id)
+                .options(joinedload(Offer.product))
+                .filter(
+                    Offer.status == OfferStatus.PUBLISHED,
+                    Publication.success.is_(True),
+                    Publication.sent_at >= cutoff,
+                )
+                .order_by(desc(Offer.score))
+                .all()
+            )
+
+            # Filter by keyword in product name
+            matches = [
+                o for o in offers if keyword in o.product.name.lower()
+            ]
+
+            if not matches:
+                await update.message.reply_text(
+                    f"😔 No encontré ofertas para *{keyword}* en las últimas 24 h\\.\n\n"
+                    f"Usa /seguir {keyword} para recibir una alerta cuando aparezca\\.",
+                    parse_mode="MarkdownV2",
+                )
+                return
+
+            lines = [f"🔍 *Resultados para «{keyword}»* ({len(matches)} encontrados)\n"]
+            for o in matches[:5]:
+                p = o.product
+                url = o.affiliate_url or p.url
+                name = p.name[:40] + "…" if len(p.name) > 40 else p.name
+                saving = o.original_price - o.current_price
+                lines.append(
+                    f"• [{name}]({url})\n"
+                    f"  💸 *{o.discount_pct:.0f}% OFF* — Ahorra *${saving:,.0f} MXN*\n"
+                    f"  🏬 {p.store.replace('_', ' ').title()}"
+                )
+
+            await update.message.reply_text(
+                "\n".join(lines),
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        finally:
+            db.close()
+
+    async def categorias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show deals by category: /categorias"""
+        from database.connection import SessionLocal
+        from database.models import Offer, OfferStatus, Publication, Product
+        from datetime import datetime, timedelta, timezone
+
+        db = SessionLocal()
+        try:
+            cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+            offers = (
+                db.query(Offer)
+                .join(Publication, Offer.id == Publication.offer_id)
+                .filter(
+                    Offer.status == OfferStatus.PUBLISHED,
+                    Publication.success.is_(True),
+                    Publication.sent_at >= cutoff,
+                )
+                .all()
+            )
+
+            if not offers:
+                await update.message.reply_text(
+                    "📭 No hay ofertas publicadas en las últimas 24 h.",
+                    disable_web_page_preview=True,
+                )
+                return
+
+            # Build category → list of (saving, discount) map
+            cat_data: dict[str, list[float]] = {}
+            for o in offers:
+                # Load the product
+                product = db.query(Product).filter(Product.id == o.product_id).first()
+                cat = (product.category if product else None) or "General"
+                if cat not in cat_data:
+                    cat_data[cat] = []
+                cat_data[cat].append(o.discount_pct)
+
+            # Sort by offer count desc
+            sorted_cats = sorted(cat_data.items(), key=lambda x: len(x[1]), reverse=True)
+
+            lines = ["📂 *OFERTAS POR CATEGORÍA — Hoy*\n"]
+            for cat, discounts in sorted_cats[:10]:
+                count = len(discounts)
+                avg_disc = sum(discounts) / count
+                lines.append(f"• *{cat}*: {count} oferta{'s' if count > 1 else ''} · {avg_disc:.0f}% prom")
+
+            lines.append("\n_Usa /buscar <producto> para buscar en estas categorías_")
+            await update.message.reply_text(
+                "\n".join(lines),
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        finally:
+            db.close()
+
     app = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("ranking", ranking))
     app.add_handler(CommandHandler("estadisticas", estadisticas))
+    app.add_handler(CommandHandler("ahorro", ahorro))
+    app.add_handler(CommandHandler("buscar", buscar))
+    app.add_handler(CommandHandler("categorias", categorias))
     app.add_handler(CommandHandler("ingresos", ingresos))
     app.add_handler(CommandHandler("comisiones", comisiones))
     app.add_handler(CommandHandler("seguir", seguir))

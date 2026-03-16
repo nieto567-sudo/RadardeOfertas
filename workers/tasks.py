@@ -329,3 +329,22 @@ def publish_pending_offers(self):
         db.close()
 
     return {"published": published, "discarded": discarded}
+
+
+# ── Weekly summary ────────────────────────────────────────────────────────────
+
+
+@app.task(name="tasks.publish_weekly_summary", bind=True, max_retries=2)
+def publish_weekly_summary(self):
+    """Publish the weekly savings summary to the Telegram channel."""
+    from database.connection import SessionLocal
+    from services.weekly_summary import publish_weekly_summary as _run_summary
+
+    db = SessionLocal()
+    try:
+        success = _run_summary(db)
+        return {"success": success}
+    except Exception as exc:  # pylint: disable=broad-except
+        raise self.retry(exc=exc, countdown=300)
+    finally:
+        db.close()
