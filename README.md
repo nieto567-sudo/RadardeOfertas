@@ -181,7 +181,7 @@ pip install pytest
 pytest tests/ -v
 ```
 
-42 tests unitarios que cubren: limpieza de precios, clasificación de ofertas, scoring, generación de enlaces de afiliado, scraper manager y formateo de mensajes de Telegram.
+104 tests unitarios que cubren: limpieza de precios, clasificación de ofertas, scoring, generación de enlaces de afiliado, scraper manager, formateo de mensajes de Telegram, tendencia de precio, salud de scrapers, suscripciones y resumen diario.
 
 ---
 

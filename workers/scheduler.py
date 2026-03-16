@@ -4,7 +4,11 @@ Celery Beat schedule configuration.
 Run with:
     celery -A workers.celery_app beat --loglevel=info
 """
+from celery.schedules import crontab
+
 from config.settings import (
+    DIGEST_HOUR_UTC,
+    DIGEST_MINUTE_UTC,
     SCHEDULE_AMAZON_SECONDS,
     SCHEDULE_MERCADOLIBRE_SECONDS,
     SCHEDULE_WALMART_SECONDS,
@@ -118,5 +122,10 @@ app.conf.beat_schedule = {
     "scrape-gearbest": {
         "task": "tasks.scrape_gearbest",
         "schedule": SCHEDULE_DEFAULT_SECONDS,
+    },
+    # ── Daily deal digest ──────────────────────────────────────────────────────
+    "daily-digest": {
+        "task": "tasks.publish_daily_digest",
+        "schedule": crontab(hour=DIGEST_HOUR_UTC, minute=DIGEST_MINUTE_UTC),
     },
 }

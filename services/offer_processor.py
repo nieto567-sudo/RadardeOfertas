@@ -18,6 +18,7 @@ from config import settings
 from database.models import Offer, OfferStatus
 from scrapers.base import ProductData
 from services.affiliate import get_affiliate_url, shorten_url
+from services.cooldown import is_on_cooldown
 from services.offer_scorer import OfferScorer
 from services.price_analyzer import PriceAnalyzer
 from services.revenue_tracker import record_revenue
@@ -43,6 +44,17 @@ class OfferProcessor:
         try:
             offer = self.analyzer.process(data)
             if offer is None:
+                return None
+
+            # Anti-spam: skip if this product was already published recently
+            if is_on_cooldown(self.db, offer.product_id):
+                offer.status = OfferStatus.DISCARDED
+                self.db.commit()
+                logger.debug(
+                    "Offer %d skipped — product %d is on cooldown",
+                    offer.id,
+                    offer.product_id,
+                )
                 return None
 
             score = self.scorer.score(offer)

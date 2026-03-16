@@ -14,6 +14,8 @@ import requests
 from config import settings
 from database.models import Offer, OfferType, Publication
 from services.offer_scorer import OfferScorer
+from services.price_comparison import compare_across_stores
+from services.price_trend import get_price_trend, trend_emoji
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,7 @@ class TelegramPublisher:
             Active SQLAlchemy session used to persist the :class:`Publication`.
         """
         product = offer.product
-        message = self._build_message(offer)
+        message = self._build_message(offer, db)
         pub = Publication(offer_id=offer.id)
 
         try:
@@ -64,7 +66,7 @@ class TelegramPublisher:
     # ── message builder ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _build_message(offer: Offer) -> str:
+    def _build_message(offer: Offer, db=None) -> str:
         product = offer.product
         label = _offer_label(offer.offer_type)
         url = offer.affiliate_url or product.url
@@ -81,13 +83,46 @@ class TelegramPublisher:
             f"🏬 *Tienda:* {product.store.replace('_', ' ').title()}",
         ]
 
+        # Price trend indicator
+        if db is not None:
+            trend = get_price_trend(db, product.id)
+            emoji = trend_emoji(trend)
+            if emoji:
+                trend_label = {
+                    "up": "subiendo",
+                    "down": "bajando",
+                    "flat": "estable",
+                }.get(trend or "", "")
+                lines.append(f"{emoji} *Tendencia de precio:* {trend_label}")
+
         if offer.rapid_drop:
             lines.append("⚡ *¡Caída rápida de precio!*")
+
+        # Coupon code
+        if product.coupon_code:
+            lines.append(f"🎟 *Cupón:* `{product.coupon_code}`")
 
         score_label = OfferScorer.classify_score(offer.score)
         lines.append(f"⭐ *Score:* {offer.score}/100 ({score_label})")
         lines.append("")
         lines.append(f"[🛒 Comprar aquí]({url})")
+
+        # Cross-store price comparison
+        if db is not None:
+            comparison = compare_across_stores(db, product)
+            if comparison and comparison.better_deal_exists:
+                lines.append("")
+                lines.append("🔍 *Comparativa de precios:*")
+                for alt in comparison.alternatives[:3]:
+                    marker = "✅" if abs(alt["price"] - comparison.cheapest_price) < 0.01 else "  "
+                    lines.append(
+                        f"{marker} [{alt['store']}]({alt['url']}) — "
+                        f"${alt['price']:,.0f}"
+                    )
+                lines.append(
+                    f"\n💡 *Más barato en {comparison.cheapest_store}:* "
+                    f"${comparison.cheapest_price:,.0f}"
+                )
 
         return "\n".join(lines)
 
