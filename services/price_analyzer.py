@@ -65,6 +65,7 @@ class PriceAnalyzer:
                 category=data.category,
                 current_price=data.price,
                 available=data.available,
+                coupon_code=data.coupon_code,
             )
             self.db.add(product)
             self.db.flush()
@@ -76,6 +77,7 @@ class PriceAnalyzer:
             product.category = data.category
             product.current_price = data.price
             product.available = data.available
+            product.coupon_code = data.coupon_code
 
         return product
 

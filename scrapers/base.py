@@ -33,6 +33,8 @@ class ProductData:
     available: bool = True
     category: Optional[str] = None
     image_url: Optional[str] = None
+    # Coupon code found on the product page (if any)
+    coupon_code: Optional[str] = None
     extra: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -45,6 +47,7 @@ class ProductData:
             "available": self.available,
             "category": self.category,
             "image_url": self.image_url,
+            "coupon_code": self.coupon_code,
         }
 
 

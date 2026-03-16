@@ -66,6 +66,7 @@ class Product(Base):
     category = Column(String(128), nullable=True)
     current_price = Column(Float, nullable=True)
     available = Column(Boolean, default=True)
+    coupon_code = Column(String(64), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -159,4 +160,57 @@ class Publication(Base):
         return (
             f"<Publication id={self.id} offer_id={self.offer_id} "
             f"success={self.success}>"
+        )
+
+
+class ScraperHealth(Base):
+    """Tracks the operational health of each scraper."""
+
+    __tablename__ = "scraper_health"
+
+    id = Column(Integer, primary_key=True, index=True)
+    store = Column(String(64), nullable=False, unique=True, index=True)
+    consecutive_failures = Column(Integer, default=0, nullable=False)
+    last_success_at = Column(DateTime, nullable=True)
+    last_products_found = Column(Integer, nullable=True)
+    last_error = Column(Text, nullable=True)
+    is_healthy = Column(Boolean, default=True, nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<ScraperHealth store={self.store!r} "
+            f"healthy={self.is_healthy} failures={self.consecutive_failures}>"
+        )
+
+
+class UserSubscription(Base):
+    """
+    A user's keyword subscription.
+
+    When an offer is detected whose product name contains *keyword*, the user
+    with *chat_id* receives a personal Telegram DM.
+    """
+
+    __tablename__ = "user_subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    chat_id = Column(BigInteger, nullable=False, index=True)
+    keyword = Column(String(256), nullable=False)
+    # Optional upper-price ceiling (MXN).  NULL = no price limit.
+    max_price = Column(Float, nullable=True)
+    # Optional store filter.  NULL = all stores.
+    store_filter = Column(String(64), nullable=True)
+    active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("chat_id", "keyword", name="uq_subscription_chat_keyword"),
+        Index("ix_subscription_active", "active"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<UserSubscription chat_id={self.chat_id} "
+            f"keyword={self.keyword!r} active={self.active}>"
         )
