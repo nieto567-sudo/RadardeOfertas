@@ -1,0 +1,11 @@
+[lint]
+# Allow E402 (module-level import not at top) in files that intentionally
+# configure logging or do other setup before imports.
+per-file-ignores = { "main.py" = ["E402"], "config/settings.py" = ["E402"] }
+
+# Ignore unused imports that are part of the public API / re-exports
+ignore = ["F401"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

@@ -67,6 +67,8 @@ class Product(Base):
     current_price = Column(Float, nullable=True)
     available = Column(Boolean, default=True)
     coupon_code = Column(String(64), nullable=True)
+    # SHA-256 fingerprint for deduplication (normalised title ± store)
+    fingerprint = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

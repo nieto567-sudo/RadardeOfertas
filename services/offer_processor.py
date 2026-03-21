@@ -25,6 +25,7 @@ from database.models import Offer, OfferStatus, Publication
 from scrapers.base import ProductData
 from services.affiliate import get_affiliate_url, shorten_url
 from services.cooldown import is_on_cooldown
+from services.deduplication import passes_basic_quality
 from services.offer_filter import passes_quality_filter
 from services.offer_scorer import OfferScorer
 from services.price_analyzer import PriceAnalyzer
@@ -32,6 +33,7 @@ from services.product_classifier import update_product_category
 from services.resale_detector import detect_resale_opportunity
 from services.revenue_tracker import record_revenue
 from services.viral_detector import calculate_viral_score
+from services.metrics import OFFERS_PROCESSED
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,17 @@ class OfferProcessor:
         otherwise returns *None*.
         """
         try:
+            # Pre-pipeline quality guard (price > 0, title length, image)
+            basic = passes_basic_quality(data.name, data.price, data.image_url)
+            if not basic.passed:
+                logger.debug(
+                    "Product '%s' rejected by basic quality check: %s",
+                    data.name,
+                    basic.reason,
+                )
+                OFFERS_PROCESSED.labels(result="discarded").inc()
+                return None
+
             offer = self.analyzer.process(data)
             if offer is None:
                 return None
@@ -68,6 +81,7 @@ class OfferProcessor:
                     offer.id,
                     offer.product_id,
                 )
+                OFFERS_PROCESSED.labels(result="discarded").inc()
                 return None
 
             # Quality / garbage filter: discard tiny or low-value deals
@@ -81,6 +95,7 @@ class OfferProcessor:
                         offer.id,
                         quality.reason,
                     )
+                    OFFERS_PROCESSED.labels(result="discarded").inc()
                     return None
             except Exception as exc:  # pylint: disable=broad-except
                 # Non-fatal: continue pipeline when filter cannot evaluate
@@ -90,6 +105,7 @@ class OfferProcessor:
             if score < settings.MIN_PUBLISH_SCORE:
                 offer.status = OfferStatus.DISCARDED
                 self.db.commit()
+                OFFERS_PROCESSED.labels(result="discarded").inc()
                 return None
 
             # Supplementary scores (stored for analytics + message display)
@@ -123,6 +139,7 @@ class OfferProcessor:
             )
 
             self.db.commit()
+            OFFERS_PROCESSED.labels(result="published").inc()
             logger.info(
                 "Offer %d ready (score=%d viral=%d resale=%d)",
                 offer.id,
@@ -133,6 +150,7 @@ class OfferProcessor:
             return offer
         except Exception as exc:  # pylint: disable=broad-except
             self.db.rollback()
+            OFFERS_PROCESSED.labels(result="error").inc()
             logger.error("OfferProcessor.process failed for %s: %s", data.name, exc)
             return None
 

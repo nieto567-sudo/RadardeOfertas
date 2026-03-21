@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from config import settings
 from database.models import Offer, OfferStatus, OfferType, PriceHistory, Product
 from scrapers.base import ProductData
+from services.deduplication import compute_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ class PriceAnalyzer:
                 current_price=data.price,
                 available=data.available,
                 coupon_code=data.coupon_code,
+                fingerprint=compute_fingerprint(data.name, data.store),
             )
             self.db.add(product)
             self.db.flush()
@@ -78,6 +80,8 @@ class PriceAnalyzer:
             product.current_price = data.price
             product.available = data.available
             product.coupon_code = data.coupon_code
+            # Keep fingerprint fresh (in case title changed)
+            product.fingerprint = compute_fingerprint(data.name, data.store)
 
         return product
 
