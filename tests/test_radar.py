@@ -1375,7 +1375,10 @@ class TestOfferProcessorCooldown:
         processor.analyzer.process.return_value = mock_offer
         processor.scorer = MagicMock()
 
+        from services.deduplication import QualityResult
         with patch("services.offer_processor.is_on_cooldown", return_value=True) as mock_cd, \
+             patch("services.offer_processor.passes_basic_quality",
+                   return_value=QualityResult(passed=True, reason="ok")), \
              patch("services.offer_processor.settings") as ms:
             ms.MIN_PUBLISH_SCORE = 60
             result = processor.process(MagicMock())
@@ -1402,7 +1405,10 @@ class TestOfferProcessorCooldown:
         processor.scorer = MagicMock()
         processor.scorer.score.return_value = 30  # below minimum → discarded
 
+        from services.deduplication import QualityResult
         with patch("services.offer_processor.is_on_cooldown", return_value=False), \
+             patch("services.offer_processor.passes_basic_quality",
+                   return_value=QualityResult(passed=True, reason="ok")), \
              patch("services.offer_processor.settings") as ms:
             ms.MIN_PUBLISH_SCORE = 60
             result = processor.process(MagicMock())
@@ -2300,3 +2306,227 @@ class TestPublisherMessageV2:
              patch("telegram.publisher.compare_across_stores", return_value=None):
             msg = TelegramPublisher._build_message(offer, db=db)
         assert "MÍNIMO HISTÓRICO" not in msg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deduplication service
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestDeduplication:
+    """Tests for the deduplication helpers."""
+
+    def test_fingerprint_same_title_same_store(self):
+        from services.deduplication import compute_fingerprint
+
+        f1 = compute_fingerprint("iPhone 15 Pro 256GB", "amazon")
+        f2 = compute_fingerprint("iPhone 15 Pro 256GB", "amazon")
+        assert f1 == f2
+
+    def test_fingerprint_case_insensitive(self):
+        from services.deduplication import compute_fingerprint
+
+        f1 = compute_fingerprint("IPHONE 15 PRO", "amazon")
+        f2 = compute_fingerprint("iphone 15 pro", "amazon")
+        assert f1 == f2
+
+    def test_fingerprint_punctuation_stripped(self):
+        from services.deduplication import compute_fingerprint
+
+        f1 = compute_fingerprint("iPhone 15 Pro!", "amazon")
+        f2 = compute_fingerprint("iPhone 15 Pro", "amazon")
+        assert f1 == f2
+
+    def test_fingerprint_different_stores_differ_by_default(self):
+        from services.deduplication import compute_fingerprint
+
+        f1 = compute_fingerprint("iPhone 15 Pro", "amazon")
+        f2 = compute_fingerprint("iPhone 15 Pro", "walmart")
+        assert f1 != f2
+
+    def test_fingerprint_cross_store_same_when_enabled(self):
+        from unittest.mock import patch
+        import services.deduplication as dedup_mod
+
+        with patch.object(dedup_mod, "_CROSS_STORE", True):
+            f1 = dedup_mod.compute_fingerprint("iPhone 15 Pro", "amazon")
+            f2 = dedup_mod.compute_fingerprint("iPhone 15 Pro", "walmart")
+            assert f1 == f2
+
+    def test_passes_basic_quality_valid(self):
+        from services.deduplication import passes_basic_quality
+
+        result = passes_basic_quality("iPhone 15 Pro 256GB", 12999.0, "https://img.com/x.jpg")
+        assert result.passed is True
+
+    def test_passes_basic_quality_zero_price(self):
+        from services.deduplication import passes_basic_quality
+
+        result = passes_basic_quality("iPhone 15 Pro 256GB", 0.0)
+        assert result.passed is False
+        assert "precio" in result.reason
+
+    def test_passes_basic_quality_negative_price(self):
+        from services.deduplication import passes_basic_quality
+
+        result = passes_basic_quality("Some product", -1.0)
+        assert result.passed is False
+
+    def test_passes_basic_quality_short_title(self):
+        from services.deduplication import passes_basic_quality
+
+        result = passes_basic_quality("AB", 999.0)
+        assert result.passed is False
+        assert "corto" in result.reason
+
+    def test_passes_basic_quality_no_image_required(self):
+        from unittest.mock import patch
+        import services.deduplication as dedup_mod
+
+        with patch.object(dedup_mod, "_REQUIRE_IMAGE", True):
+            result = dedup_mod.passes_basic_quality("Valid product title here", 999.0, None)
+            assert result.passed is False
+            assert "imagen" in result.reason
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Circuit breaker
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestCircuitBreaker:
+    """Tests for the circuit breaker (in-process fallback, no Redis)."""
+
+    def _make_cb(self, store="test_store"):
+        from services.circuit_breaker import CircuitBreaker
+        return CircuitBreaker(store, redis_client=None)
+
+    def test_initially_closed(self):
+        cb = self._make_cb()
+        assert cb.is_open() is False
+
+    def test_opens_after_threshold_failures(self):
+        from services.circuit_breaker import CircuitBreaker
+        from unittest.mock import patch
+
+        with patch("services.circuit_breaker._FAILURE_THRESHOLD", 3):
+            cb = CircuitBreaker("store_x", redis_client=None)
+            for _ in range(3):
+                cb.record_failure()
+            assert cb.is_open() is True
+
+    def test_closes_after_success(self):
+        from services.circuit_breaker import CircuitBreaker
+        from unittest.mock import patch
+
+        with patch("services.circuit_breaker._FAILURE_THRESHOLD", 2):
+            cb = CircuitBreaker("store_y", redis_client=None)
+            cb.record_failure()
+            cb.record_failure()
+            assert cb.is_open() is True
+            cb.record_success()
+            assert cb.is_open() is False
+
+    def test_get_status_closed(self):
+        cb = self._make_cb("store_z")
+        status = cb.get_status()
+        assert status["state"] == "closed"
+        assert status["store"] == "store_z"
+
+    def test_get_status_open(self):
+        from services.circuit_breaker import CircuitBreaker
+        from unittest.mock import patch
+
+        with patch("services.circuit_breaker._FAILURE_THRESHOLD", 1):
+            cb = CircuitBreaker("store_w", redis_client=None)
+            cb.record_failure()
+            status = cb.get_status()
+            assert status["state"] == "open"
+
+    def test_pause_makes_open(self):
+        cb = self._make_cb("store_p")
+        cb.pause()
+        assert cb.is_open() is True
+
+    def test_resume_closes(self):
+        cb = self._make_cb("store_q")
+        cb.pause()
+        assert cb.is_open() is True
+        cb.resume()
+        assert cb.is_open() is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin permission guard
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestAdminPermissions:
+    """Tests for the Telegram admin permission helper."""
+
+    def test_known_admin_is_allowed(self):
+        from unittest.mock import patch
+        from telegram.bot import _is_admin
+
+        with patch("telegram.bot.settings") as mock_settings:
+            mock_settings.TELEGRAM_ADMIN_USER_IDS = [111, 222, 333]
+            assert _is_admin(111) is True
+            assert _is_admin(222) is True
+
+    def test_unknown_user_is_denied(self):
+        from unittest.mock import patch
+        from telegram.bot import _is_admin
+
+        with patch("telegram.bot.settings") as mock_settings:
+            mock_settings.TELEGRAM_ADMIN_USER_IDS = [111]
+            assert _is_admin(999) is False
+
+    def test_empty_admin_list_denies_all(self):
+        from unittest.mock import patch
+        from telegram.bot import _is_admin
+
+        with patch("telegram.bot.settings") as mock_settings:
+            mock_settings.TELEGRAM_ADMIN_USER_IDS = []
+            assert _is_admin(111) is False
+            assert _is_admin(0) is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Structured logging
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestLoggingConfig:
+    def test_configure_text_logging_does_not_raise(self):
+        import os
+        os.environ["LOG_FORMAT"] = "text"
+        os.environ["LOG_LEVEL"] = "DEBUG"
+        from services.logging_config import configure_logging
+        configure_logging()  # should not raise
+
+    def test_configure_json_logging_does_not_raise(self):
+        import os
+        os.environ["LOG_FORMAT"] = "json"
+        os.environ["LOG_LEVEL"] = "INFO"
+        from services.logging_config import configure_logging
+        configure_logging()  # should not raise
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Metrics stubs
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestMetricsImport:
+    def test_metrics_importable(self):
+        from services.metrics import (
+            SCRAPE_PRODUCTS,
+            SCRAPE_ERRORS,
+            OFFERS_PROCESSED,
+            SCRAPE_DURATION,
+            CYCLE_DURATION,
+        )
+        # Stubs or real counters should both support labels/inc
+        SCRAPE_PRODUCTS.labels(store="test").inc()
+        SCRAPE_ERRORS.labels(store="test").inc()
+        OFFERS_PROCESSED.labels(result="published").inc()

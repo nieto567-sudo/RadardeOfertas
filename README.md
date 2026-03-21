@@ -188,3 +188,154 @@ pytest tests/ -v
 ## Licencia
 
 MIT
+---
+
+## Nuevas funcionalidades (Super Bot)
+
+### Observabilidad
+
+#### Logging estructurado
+
+Configura el formato y nivel de log mediante variables de entorno:
+
+```bash
+LOG_FORMAT=json   # "json" para log en JSON (ideal para log aggregators), "text" para consola
+LOG_LEVEL=INFO    # DEBUG, INFO, WARNING, ERROR, CRITICAL
+```
+
+#### Métricas Prometheus
+
+Inicia el servidor de métricas con `--metrics`:
+
+```bash
+python main.py run-loop --metrics
+```
+
+Accede a las métricas en `http://localhost:9090/metrics`. Métricas disponibles:
+
+| Métrica | Tipo | Descripción |
+|---|---|---|
+| `radar_scrape_products_total` | Counter | Productos scrapeados por tienda |
+| `radar_scrape_errors_total` | Counter | Errores de scraping por tienda |
+| `radar_offers_processed_total` | Counter | Ofertas procesadas (por resultado: `published`, `discarded`, `error`) |
+| `radar_scrape_duration_seconds` | Histogram | Latencia de scraping por tienda |
+| `radar_cycle_duration_seconds` | Histogram | Latencia total del ciclo `run_once` |
+
+Configura el puerto con `PROMETHEUS_PORT` (default: `9090`).
+
+#### Healthcheck
+
+```bash
+python main.py healthcheck
+```
+
+Verifica PostgreSQL, Redis, Telegram API y estado de los circuit breakers. Retorna código de salida 0 si todo está sano, 1 si hay problemas.
+
+---
+
+### Resiliencia de scrapers
+
+#### Reintentos con backoff + jitter
+
+Todos los scrapers reintentan automáticamente las peticiones HTTP hasta 3 veces con backoff exponencial + jitter aleatorio.
+
+#### Circuit breaker por tienda
+
+Si una tienda falla N veces consecutivas, su scraper se pausa automáticamente por un período de enfriamiento.
+
+| Variable | Descripción | Valor por defecto |
+|---|---|---|
+| `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | Fallos consecutivos antes de abrir el circuito | `5` |
+| `CIRCUIT_BREAKER_COOLDOWN_SECONDS` | Segundos de pausa antes del siguiente intento | `300` |
+
+---
+
+### Anti-spam y deduplicación mejorada
+
+Cada producto recibe una huella digital (SHA-256) basada en su título normalizado.
+
+| Variable | Descripción | Valor por defecto |
+|---|---|---|
+| `DEDUP_CROSS_STORE` | Deduplicar el mismo producto entre distintas tiendas | `false` |
+| `REQUIRE_IMAGE` | Rechazar productos sin imagen | `false` |
+| `MIN_TITLE_LENGTH` | Longitud mínima del título del producto | `10` |
+
+---
+
+### Nuevas variables de entorno
+
+| Variable | Descripción | Valor por defecto |
+|---|---|---|
+| `TELEGRAM_ADMIN_USER_IDS` | IDs de Telegram con permisos de admin (separados por coma) | — |
+| `LOG_FORMAT` | Formato de logs: `text` o `json` | `text` |
+| `LOG_LEVEL` | Nivel de logging | `INFO` |
+| `PROMETHEUS_PORT` | Puerto del servidor de métricas Prometheus | `9090` |
+| `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | Fallos antes de abrir el circuit breaker | `5` |
+| `CIRCUIT_BREAKER_COOLDOWN_SECONDS` | Segundos de enfriamiento del circuit breaker | `300` |
+| `DEDUP_CROSS_STORE` | Deduplicar cross-store | `false` |
+| `REQUIRE_IMAGE` | Requerir imagen para publicar | `false` |
+| `MIN_TITLE_LENGTH` | Longitud mínima del título | `10` |
+
+---
+
+### Comandos admin de Telegram
+
+Restringidos a usuarios en `TELEGRAM_ADMIN_USER_IDS`:
+
+| Comando | Descripción |
+|---|---|
+| `/pause <store>` | Pausar scraping para una tienda |
+| `/resume <store>` | Reanudar una tienda pausada |
+| `/stats` | Estadísticas de las últimas 24 h |
+| `/errors` | Top errores recientes de scrapers |
+| `/health` | Resumen del healthcheck |
+| `/config` | Valores de configuración (no sensibles) |
+
+---
+
+### CI/CD
+
+Pipeline de GitHub Actions (`.github/workflows/ci.yml`):
+
+- **Lint**: `ruff check` en cada push/PR
+- **Tests**: `pytest tests/ -v` con Python 3.11
+- **Docker Build**: verifica que el `Dockerfile` compile correctamente
+
+---
+
+## Runbook
+
+### DB caída (PostgreSQL)
+
+1. Verifica el contenedor: `docker-compose ps db`
+2. Revisa logs: `docker-compose logs db`
+3. Reinicia: `docker-compose restart db`
+4. Si persiste, revisa disco lleno: `df -h`
+5. El bot seguirá en ejecución pero sin guardar ofertas hasta que la DB vuelva
+
+### Redis caído
+
+1. `docker-compose restart redis`
+2. Los circuit breakers volverán al estado "closed" (se usan contadores en memoria como fallback)
+3. Las tareas Celery pendientes se perderán; se reanudarán en el siguiente ciclo
+
+### Telegram 429 (Too Many Requests)
+
+1. El publisher incluye manejo de `retry_after` automático
+2. Reduce `MAX_DAILY_PUBLICATIONS` temporalmente
+3. Espera el tiempo indicado por Telegram (usualmente < 1 min)
+
+### Scraper caído / bloqueado
+
+1. Desde Telegram: `/errors` para ver qué store está fallando
+2. Verificar si el sitio está bloqueando: prueba la URL manualmente
+3. Si está bloqueado: `/pause <store>` para pausar temporalmente
+4. Cuando el sitio vuelva: `/resume <store>`
+5. El circuit breaker se abrirá automáticamente después de `CIRCUIT_BREAKER_FAILURE_THRESHOLD` fallos
+
+### Cómo ajustar umbrales
+
+- Bajar score mínimo (más ofertas, menor calidad): `MIN_PUBLISH_SCORE=50`
+- Subir descuento mínimo (solo grandes descuentos): `MIN_DISCOUNT_PCT=30`
+- Cambiar cooldown (tiempo entre re-publicaciones del mismo producto): `PUBLICATION_COOLDOWN_HOURS=12`
+- Cambiar cap diario: `MAX_DAILY_PUBLICATIONS=20`

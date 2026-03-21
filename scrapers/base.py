@@ -9,6 +9,7 @@ A ProductData is a plain dict with the keys documented below.
 from __future__ import annotations
 
 import logging
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -19,6 +20,11 @@ from bs4 import BeautifulSoup
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# Retry configuration (env-configurable via config/settings.py)
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 2.0   # seconds
+_JITTER_MAX = 1.0     # seconds of random jitter added to each wait
 
 
 @dataclass
@@ -76,15 +82,40 @@ class BaseScraper:
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def get(self, url: str, **kwargs) -> requests.Response:
-        """Perform a GET request with the shared session and a polite delay."""
+        """
+        Perform a GET request with the shared session, a polite delay, and
+        automatic retry with exponential backoff + jitter on transient errors.
+        """
         time.sleep(self.delay)
-        try:
-            resp = self.session.get(url, timeout=self.timeout, **kwargs)
-            resp.raise_for_status()
-            return resp
-        except requests.RequestException as exc:
-            logger.warning("[%s] GET %s failed: %s", self.store_name, url, exc)
-            raise
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                resp = self.session.get(url, timeout=self.timeout, **kwargs)
+                resp.raise_for_status()
+                return resp
+            except requests.RequestException as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    wait = _BACKOFF_BASE ** attempt + random.uniform(0, _JITTER_MAX)
+                    logger.warning(
+                        "[%s] GET %s failed (attempt %d/%d): %s — retrying in %.1fs",
+                        self.store_name,
+                        url,
+                        attempt,
+                        _MAX_RETRIES,
+                        exc,
+                        wait,
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.warning(
+                        "[%s] GET %s failed after %d attempts: %s",
+                        self.store_name,
+                        url,
+                        _MAX_RETRIES,
+                        exc,
+                    )
+        raise last_exc  # type: ignore[misc]
 
     def soup(self, url: str, **kwargs) -> BeautifulSoup:
         """Return a BeautifulSoup tree for a URL."""

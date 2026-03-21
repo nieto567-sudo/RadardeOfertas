@@ -22,6 +22,13 @@ CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL)
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "")
 
+# Comma-separated list of Telegram user IDs that can run admin commands.
+# Example: TELEGRAM_ADMIN_USER_IDS=123456789,987654321
+_admin_ids_raw = os.getenv("TELEGRAM_ADMIN_USER_IDS", "")
+TELEGRAM_ADMIN_USER_IDS: list[int] = [
+    int(x.strip()) for x in _admin_ids_raw.split(",") if x.strip().isdigit()
+]
+
 # ── Affiliate tags ────────────────────────────────────────────────────────────
 AMAZON_AFFILIATE_TAG: str = os.getenv("AMAZON_AFFILIATE_TAG", "")
 MERCADOLIBRE_AFFILIATE_ID: str = os.getenv("MERCADOLIBRE_AFFILIATE_ID", "")
@@ -150,3 +157,29 @@ SMART_HOURS_EVENING_END: int = int(os.getenv("SMART_HOURS_EVENING_END", "23"))
 WEEKLY_SUMMARY_DOW: int = int(os.getenv("WEEKLY_SUMMARY_DOW", "6"))  # Sunday
 WEEKLY_SUMMARY_HOUR_UTC: int = int(os.getenv("WEEKLY_SUMMARY_HOUR_UTC", "15"))  # 9 AM MX
 WEEKLY_SUMMARY_MINUTE_UTC: int = int(os.getenv("WEEKLY_SUMMARY_MINUTE_UTC", "0"))
+
+# ── Observability ─────────────────────────────────────────────────────────────
+# Log format: "text" (human-readable) or "json" (structured for log aggregators)
+LOG_FORMAT: str = os.getenv("LOG_FORMAT", "text")
+# Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+# Port for the Prometheus HTTP metrics server
+PROMETHEUS_PORT: int = int(os.getenv("PROMETHEUS_PORT", "9090"))
+
+# ── Circuit breaker ────────────────────────────────────────────────────────────
+# Number of consecutive scraper failures before the circuit opens.
+CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = int(
+    os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "5")
+)
+# Seconds to wait (circuit open) before allowing the next probe attempt.
+CIRCUIT_BREAKER_COOLDOWN_SECONDS: int = int(
+    os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "300")
+)
+
+# ── Deduplication ─────────────────────────────────────────────────────────────
+# Set to "true" to deduplicate the same product across different stores.
+DEDUP_CROSS_STORE: bool = os.getenv("DEDUP_CROSS_STORE", "false").lower() == "true"
+# Set to "true" to reject products without an image_url.
+REQUIRE_IMAGE: bool = os.getenv("REQUIRE_IMAGE", "false").lower() == "true"
+# Minimum product title length (shorter titles are rejected as garbage).
+MIN_TITLE_LENGTH: int = int(os.getenv("MIN_TITLE_LENGTH", "10"))

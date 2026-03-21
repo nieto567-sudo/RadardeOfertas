@@ -14,6 +14,14 @@ Starts a simple polling bot that responds to:
   /seguir       – subscribe to keyword alerts  (/seguir iphone)
   /dejar        – unsubscribe from keyword      (/dejar iphone)
   /mis_alertas  – list all active subscriptions
+
+Admin-only commands (restricted to TELEGRAM_ADMIN_USER_IDS):
+  /pause <store>  – pause scraping for a store
+  /resume <store> – resume a paused store
+  /stats          – last 24 h stats (scraped, published, errors)
+  /errors         – top recent scraper errors
+  /health         – healthcheck summary
+  /config         – show current non-sensitive config values
 """
 from __future__ import annotations
 
@@ -22,6 +30,11 @@ import logging
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _is_admin(user_id: int) -> bool:
+    """Return True if *user_id* is in TELEGRAM_ADMIN_USER_IDS."""
+    return user_id in settings.TELEGRAM_ADMIN_USER_IDS
 
 
 def run_bot() -> None:  # pragma: no cover
@@ -494,6 +507,183 @@ def run_bot() -> None:  # pragma: no cover
     app.add_handler(CommandHandler("seguir", seguir))
     app.add_handler(CommandHandler("dejar", dejar))
     app.add_handler(CommandHandler("mis_alertas", mis_alertas))
+
+    # ── Admin commands ────────────────────────────────────────────────────────
+
+    async def _admin_guard(update: Update) -> bool:
+        """Return True if the user is allowed to run admin commands."""
+        uid = update.effective_user.id if update.effective_user else None
+        if uid is None or not _is_admin(uid):
+            await update.message.reply_text(
+                "⛔ No tienes permisos para usar este comando.",
+                disable_web_page_preview=True,
+            )
+            return False
+        return True
+
+    async def pause_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Pause scraping for a store: /pause <store>"""
+        if not await _admin_guard(update):
+            return
+        if not context.args:
+            await update.message.reply_text("Uso: /pause <store>")
+            return
+        store = context.args[0].lower()
+        from services.circuit_breaker import CircuitBreaker
+        cb = CircuitBreaker(store)
+        cb.pause()
+        await update.message.reply_text(
+            f"⏸ Scraping pausado para *{store}*.",
+            parse_mode="Markdown",
+        )
+
+    async def resume_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Resume a paused store: /resume <store>"""
+        if not await _admin_guard(update):
+            return
+        if not context.args:
+            await update.message.reply_text("Uso: /resume <store>")
+            return
+        store = context.args[0].lower()
+        from services.circuit_breaker import CircuitBreaker
+        cb = CircuitBreaker(store)
+        cb.resume()
+        await update.message.reply_text(
+            f"▶️ Scraping reanudado para *{store}*.",
+            parse_mode="Markdown",
+        )
+
+    async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show last 24 h stats: /stats"""
+        if not await _admin_guard(update):
+            return
+        from database.connection import SessionLocal
+        from database.models import Offer, OfferStatus, Publication, Product
+        from database.models import ScraperHealth
+        from datetime import datetime, timedelta, timezone
+
+        db = SessionLocal()
+        try:
+            cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+            products_scraped = (
+                db.query(Product)
+                .filter(Product.updated_at >= cutoff)
+                .count()
+            )
+            published = (
+                db.query(Publication)
+                .filter(
+                    Publication.success.is_(True),
+                    Publication.sent_at >= cutoff,
+                )
+                .count()
+            )
+            discarded = (
+                db.query(Offer)
+                .filter(
+                    Offer.status == OfferStatus.DISCARDED,
+                    Offer.detected_at >= cutoff,
+                )
+                .count()
+            )
+            errors = (
+                db.query(Publication)
+                .filter(
+                    Publication.success.is_(False),
+                    Publication.sent_at >= cutoff,
+                )
+                .count()
+            )
+            unhealthy = (
+                db.query(ScraperHealth)
+                .filter(ScraperHealth.is_healthy.is_(False))
+                .count()
+            )
+            text = (
+                "📊 *Estadísticas últimas 24 h*\n\n"
+                f"🔍 Productos scrapeados: *{products_scraped:,}*\n"
+                f"✅ Publicadas: *{published:,}*\n"
+                f"🗑 Descartadas: *{discarded:,}*\n"
+                f"❌ Errores de publicación: *{errors:,}*\n"
+                f"⚠️ Scrapers con problemas: *{unhealthy:,}*"
+            )
+            await update.message.reply_text(text, parse_mode="Markdown",
+                                            disable_web_page_preview=True)
+        finally:
+            db.close()
+
+    async def admin_errors(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show top recent scraper errors: /errors"""
+        if not await _admin_guard(update):
+            return
+        from database.connection import SessionLocal
+        from database.models import ScraperHealth
+
+        db = SessionLocal()
+        try:
+            unhealthy = (
+                db.query(ScraperHealth)
+                .filter(ScraperHealth.last_error.isnot(None))
+                .order_by(ScraperHealth.consecutive_failures.desc())
+                .limit(10)
+                .all()
+            )
+            if not unhealthy:
+                await update.message.reply_text(
+                    "✅ No hay errores recientes en los scrapers.",
+                    disable_web_page_preview=True,
+                )
+                return
+            lines = ["🚨 *Errores recientes de scrapers*\n"]
+            for sh in unhealthy:
+                lines.append(
+                    f"🏬 *{sh.store}* — {sh.consecutive_failures} fallos\n"
+                    f"   `{(sh.last_error or '')[:100]}`"
+                )
+            await update.message.reply_text(
+                "\n".join(lines),
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        finally:
+            db.close()
+
+    async def admin_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show healthcheck summary: /health"""
+        if not await _admin_guard(update):
+            return
+        from services.healthcheck import get_healthcheck_summary
+        summary = get_healthcheck_summary()
+        await update.message.reply_text(summary, parse_mode="Markdown",
+                                        disable_web_page_preview=True)
+
+    async def admin_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show relevant non-sensitive config values: /config"""
+        if not await _admin_guard(update):
+            return
+        text = (
+            "⚙️ *Configuración actual*\n\n"
+            f"📏 `MIN_PUBLISH_SCORE` = {settings.MIN_PUBLISH_SCORE}\n"
+            f"⏱ `PUBLICATION_COOLDOWN_HOURS` = {settings.PUBLICATION_COOLDOWN_HOURS}\n"
+            f"📅 `MAX_DAILY_PUBLICATIONS` = {settings.MAX_DAILY_PUBLICATIONS}\n"
+            f"💰 `MIN_DISCOUNT_PCT` = {settings.MIN_DISCOUNT_PCT}%\n"
+            f"💵 `MIN_ABSOLUTE_SAVING_MXN` = ${settings.MIN_ABSOLUTE_SAVING_MXN:,.0f}\n"
+            f"🔄 `REQUEST_TIMEOUT` = {settings.REQUEST_TIMEOUT}s\n"
+            f"🔁 `CIRCUIT_BREAKER_FAILURE_THRESHOLD` = {settings.CIRCUIT_BREAKER_FAILURE_THRESHOLD}\n"
+            f"⏸ `CIRCUIT_BREAKER_COOLDOWN_SECONDS` = {settings.CIRCUIT_BREAKER_COOLDOWN_SECONDS}s\n"
+            f"🏷 `DEDUP_CROSS_STORE` = {settings.DEDUP_CROSS_STORE}\n"
+            f"📝 `LOG_FORMAT` = {settings.LOG_FORMAT}\n"
+            f"📊 `PROMETHEUS_PORT` = {settings.PROMETHEUS_PORT}\n"
+        )
+        await update.message.reply_text(text, parse_mode="Markdown",
+                                        disable_web_page_preview=True)
+
+    app.add_handler(CommandHandler("pause", pause_store))
+    app.add_handler(CommandHandler("resume", resume_store))
+    app.add_handler(CommandHandler("stats", admin_stats))
+    app.add_handler(CommandHandler("errors", admin_errors))
+    app.add_handler(CommandHandler("health", admin_health))
+    app.add_handler(CommandHandler("config", admin_config))
 
     logger.info("Telegram bot started (polling)…")
     app.run_polling()
