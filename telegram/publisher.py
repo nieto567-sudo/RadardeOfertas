@@ -45,6 +45,10 @@ class TelegramPublisher:
         """
         Send *offer* to the Telegram channel and persist the result.
 
+        For ``PRICE_ERROR`` offers, a private notification is sent to
+        ``TELEGRAM_ADMIN_CHAT_ID`` *before* the channel post, so the admin
+        gets a heads-up about every pricing mistake detected.
+
         Parameters
         ----------
         offer : Offer
@@ -55,6 +59,22 @@ class TelegramPublisher:
         product = offer.product
         message = self._build_message(offer, db)
         pub = Publication(offer_id=offer.id)
+
+        # ── Admin pre-notification for price errors ───────────────────────────
+        if (
+            offer.offer_type == OfferType.PRICE_ERROR
+            and settings.PRICE_ERROR_NOTIFY_ADMIN
+        ):
+            try:
+                self._notify_admin_price_error(offer, message)
+            except Exception as exc:  # pylint: disable=broad-except
+                # Never let a failing admin notification block the channel post
+                logger.error(
+                    "Admin price-error notification raised unexpectedly "
+                    "for offer %d: %s",
+                    offer.id,
+                    exc,
+                )
 
         try:
             if product.image_url:
@@ -71,6 +91,85 @@ class TelegramPublisher:
 
         db.add(pub)
         return pub
+
+    def _notify_admin_price_error(self, offer: Offer, channel_message: str) -> None:
+        """
+        Send a private DM to the admin with the full offer details.
+
+        This fires *before* the channel post so the admin always sees it first.
+        Failures are logged but never propagate — the channel post must proceed.
+        """
+        admin_chat = settings.TELEGRAM_ADMIN_CHAT_ID
+        if not admin_chat:
+            logger.debug(
+                "Admin pre-notification skipped: TELEGRAM_ADMIN_CHAT_ID not set"
+            )
+            return
+
+        product = offer.product
+        url = offer.affiliate_url or product.url
+        saving = offer.original_price - offer.current_price
+
+        header = (
+            "🚨 *ALERTA PRIVADA — Error de precio detectado*\n"
+            "_(Se publicará automáticamente en el canal)_\n\n"
+        )
+        details = (
+            f"🏬 *Tienda:* {product.store.replace('_', ' ').title()}\n"
+            f"📦 *Producto:* {product.name}\n"
+            f"💰 *Precio habitual:* ${offer.original_price:,.0f} MXN\n"
+            f"🔥 *Precio error:* ${offer.current_price:,.0f} MXN\n"
+            f"💸 *Ahorro:* ${saving:,.0f} MXN ({offer.discount_pct:.0f}%)\n"
+            f"⭐ *Score:* {offer.score}/100\n"
+            f"🔗 [Ver producto]({url})\n"
+        )
+        text = header + details
+
+        endpoint = f"{self._base}/sendMessage"
+        payload: dict = {
+            "chat_id": admin_chat,
+            "text": text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }
+
+        # Also send the product photo to the admin if available
+        if product.image_url:
+            try:
+                photo_endpoint = f"{self._base}/sendPhoto"
+                self._post(
+                    photo_endpoint,
+                    {
+                        "chat_id": admin_chat,
+                        "photo": product.image_url,
+                        "caption": text,
+                        "parse_mode": "Markdown",
+                    },
+                )
+                logger.info(
+                    "Admin price-error notification (with photo) sent for offer %d",
+                    offer.id,
+                )
+                return
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning(
+                    "Admin photo notification failed for offer %d, "
+                    "falling back to text: %s",
+                    offer.id,
+                    exc,
+                )
+
+        try:
+            self._post(endpoint, payload)
+            logger.info(
+                "Admin price-error notification sent for offer %d", offer.id
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.error(
+                "Admin price-error notification failed for offer %d: %s",
+                offer.id,
+                exc,
+            )
 
     # ── message builder ───────────────────────────────────────────────────────
 

@@ -25,9 +25,20 @@ TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "")
 # Comma-separated list of Telegram user IDs that can run admin commands.
 # Example: TELEGRAM_ADMIN_USER_IDS=123456789,987654321
 _admin_ids_raw = os.getenv("TELEGRAM_ADMIN_USER_IDS", "")
-TELEGRAM_ADMIN_USER_IDS: list[int] = [
-    int(x.strip()) for x in _admin_ids_raw.split(",") if x.strip().isdigit()
-]
+TELEGRAM_ADMIN_USER_IDS: list[int] = []
+for _entry in _admin_ids_raw.split(","):
+    _entry = _entry.strip()
+    if not _entry:
+        continue
+    if _entry.isdigit():
+        TELEGRAM_ADMIN_USER_IDS.append(int(_entry))
+    else:
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "TELEGRAM_ADMIN_USER_IDS: invalid entry %r ignored (must be a numeric user ID)",
+            _entry,
+        )
 
 # ── Affiliate tags ────────────────────────────────────────────────────────────
 AMAZON_AFFILIATE_TAG: str = os.getenv("AMAZON_AFFILIATE_TAG", "")
@@ -107,6 +118,15 @@ SCRAPER_FAILURE_ALERT_THRESHOLD: int = int(
 )
 # Telegram chat_id (user or group) that receives admin/health alerts.
 TELEGRAM_ADMIN_CHAT_ID: str = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
+
+# ── Price-error admin pre-notification ────────────────────────────────────────
+# When true, send a private DM to TELEGRAM_ADMIN_CHAT_ID with the full offer
+# details *before* the offer is published to the channel.  This gives the admin
+# a heads-up for every "price error" (errores de precio) deal.
+# Set to "false" to disable and publish directly without a prior notification.
+PRICE_ERROR_NOTIFY_ADMIN: bool = (
+    os.getenv("PRICE_ERROR_NOTIFY_ADMIN", "true").lower() == "true"
+)
 
 # ── Cross-store price comparison ──────────────────────────────────────────────
 # Minimum number of shared significant words to consider two product names the same.

@@ -275,6 +275,26 @@ Cada producto recibe una huella digital (SHA-256) basada en su título normaliza
 | `DEDUP_CROSS_STORE` | Deduplicar cross-store | `false` |
 | `REQUIRE_IMAGE` | Requerir imagen para publicar | `false` |
 | `MIN_TITLE_LENGTH` | Longitud mínima del título | `10` |
+| `PRICE_ERROR_NOTIFY_ADMIN` | Enviar notificación privada al admin antes de publicar errores de precio | `true` |
+
+---
+
+### Notificación de errores de precio al admin
+
+Cuando el bot detecta un **error de precio** (oferta con score ≥ 95, precio < `PRICE_ERROR_THRESHOLD` × precio histórico, por defecto < 40%), **envía primero un mensaje privado al admin** (`TELEGRAM_ADMIN_CHAT_ID`) con todos los detalles antes de publicarlo en el canal.
+
+**Flujo:**
+1. 🤖 Bot detecta error de precio
+2. 📩 Admin recibe DM privado con: producto, precio habitual, precio error, ahorro y enlace directo
+3. 📢 El bot publica automáticamente en el canal de Telegram
+
+**Configuración necesaria:**
+```
+TELEGRAM_ADMIN_CHAT_ID=tu_chat_id   # Obtén tu chat_id hablando con @userinfobot
+PRICE_ERROR_NOTIFY_ADMIN=true       # true (default) = activado, false = desactivado
+```
+
+> 💡 Si la notificación al admin falla (ej. error de red), el bot **igual publica** en el canal sin interrupciones.
 
 ---
 

@@ -2530,3 +2530,246 @@ class TestMetricsImport:
         SCRAPE_PRODUCTS.labels(store="test").inc()
         SCRAPE_ERRORS.labels(store="test").inc()
         OFFERS_PROCESSED.labels(result="published").inc()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin price-error pre-notification
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestPriceErrorAdminNotification:
+    """Tests for the admin DM sent before publishing a price-error offer."""
+
+    def _make_price_error_offer(self, image_url=None):
+        from database.models import OfferType, Offer, Product
+
+        product = MagicMock(spec=Product)
+        product.name = "PlayStation 5"
+        product.store = "walmart"
+        product.url = "https://www.walmart.com.mx/ps5"
+        product.image_url = image_url
+
+        offer = MagicMock(spec=Offer)
+        offer.id = 42
+        offer.product = product
+        offer.offer_type = OfferType.PRICE_ERROR
+        offer.original_price = 11999.0
+        offer.current_price = 1200.0
+        offer.discount_pct = 90.0
+        offer.score = 98
+        offer.affiliate_url = "https://www.walmart.com.mx/ps5?aff=1"
+        return offer
+
+    def _make_non_price_error_offer(self):
+        from database.models import OfferType, Offer, Product
+
+        product = MagicMock(spec=Product)
+        product.name = "Headphones"
+        product.store = "amazon"
+        product.url = "https://amazon.com.mx/headphones"
+        product.image_url = None
+
+        offer = MagicMock(spec=Offer)
+        offer.id = 43
+        offer.product = product
+        offer.offer_type = OfferType.EXCELLENT
+        offer.original_price = 2000.0
+        offer.current_price = 800.0
+        offer.discount_pct = 60.0
+        offer.score = 82
+        offer.affiliate_url = "https://amazon.com.mx/headphones?aff=1"
+        return offer
+
+    def test_admin_notified_for_price_error(self):
+        """_notify_admin_price_error must call the Bot API when admin chat is set."""
+        from unittest.mock import patch, MagicMock
+        from telegram.publisher import TelegramPublisher
+
+        offer = self._make_price_error_offer()
+
+        with patch("telegram.publisher.settings") as ms, \
+             patch.object(TelegramPublisher, "_post") as mock_post:
+            ms.TELEGRAM_BOT_TOKEN = "testtoken"
+            ms.TELEGRAM_CHANNEL_ID = "@testchannel"
+            ms.TELEGRAM_ADMIN_CHAT_ID = "999"
+            ms.PRICE_ERROR_NOTIFY_ADMIN = True
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "testtoken"
+            pub.channel_id = "@testchannel"
+            pub._base = "https://api.telegram.org/bottesttoken"
+            mock_post.return_value = {"message_id": 1}
+
+            pub._notify_admin_price_error(offer, "channel message")
+
+        mock_post.assert_called_once()
+        args = mock_post.call_args
+        payload = args[0][1]
+        assert payload["chat_id"] == "999"
+        assert "PlayStation 5" in payload.get("text", "") or \
+               "PlayStation 5" in payload.get("caption", "")
+
+    def test_admin_not_notified_when_no_admin_chat(self):
+        """No Bot API call when TELEGRAM_ADMIN_CHAT_ID is empty."""
+        from unittest.mock import patch, MagicMock
+        from telegram.publisher import TelegramPublisher
+
+        offer = self._make_price_error_offer()
+
+        with patch("telegram.publisher.settings") as ms, \
+             patch.object(TelegramPublisher, "_post") as mock_post:
+            ms.TELEGRAM_BOT_TOKEN = "testtoken"
+            ms.TELEGRAM_CHANNEL_ID = "@testchannel"
+            ms.TELEGRAM_ADMIN_CHAT_ID = ""
+            ms.PRICE_ERROR_NOTIFY_ADMIN = True
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "testtoken"
+            pub.channel_id = "@testchannel"
+            pub._base = "https://api.telegram.org/bottesttoken"
+
+            pub._notify_admin_price_error(offer, "channel message")
+
+        mock_post.assert_not_called()
+
+    def test_publish_calls_admin_notification_for_price_error(self):
+        """publish() must call _notify_admin_price_error for PRICE_ERROR offers."""
+        from unittest.mock import patch, MagicMock
+        from telegram.publisher import TelegramPublisher
+        from database.models import OfferType
+
+        offer = self._make_price_error_offer()
+        db = MagicMock()
+
+        with patch("telegram.publisher.settings") as ms, \
+             patch.object(TelegramPublisher, "_notify_admin_price_error") as mock_notify, \
+             patch.object(TelegramPublisher, "_send_message") as mock_send:
+            ms.TELEGRAM_BOT_TOKEN = "testtoken"
+            ms.TELEGRAM_CHANNEL_ID = "@testchannel"
+            ms.TELEGRAM_ADMIN_CHAT_ID = "999"
+            ms.PRICE_ERROR_NOTIFY_ADMIN = True
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "testtoken"
+            pub.channel_id = "@testchannel"
+            pub._base = "https://api.telegram.org/bottesttoken"
+            mock_send.return_value = {"message_id": 10}
+
+            pub.publish(offer, db)
+
+        mock_notify.assert_called_once()
+
+    def test_publish_does_not_notify_admin_for_non_price_error(self):
+        """publish() must NOT call _notify_admin_price_error for non-price-error offers."""
+        from unittest.mock import patch, MagicMock
+        from telegram.publisher import TelegramPublisher
+
+        offer = self._make_non_price_error_offer()
+        db = MagicMock()
+
+        with patch("telegram.publisher.settings") as ms, \
+             patch.object(TelegramPublisher, "_notify_admin_price_error") as mock_notify, \
+             patch.object(TelegramPublisher, "_send_message") as mock_send:
+            ms.TELEGRAM_BOT_TOKEN = "testtoken"
+            ms.TELEGRAM_CHANNEL_ID = "@testchannel"
+            ms.TELEGRAM_ADMIN_CHAT_ID = "999"
+            ms.PRICE_ERROR_NOTIFY_ADMIN = True
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "testtoken"
+            pub.channel_id = "@testchannel"
+            pub._base = "https://api.telegram.org/bottesttoken"
+            mock_send.return_value = {"message_id": 11}
+
+            pub.publish(offer, db)
+
+        mock_notify.assert_not_called()
+
+    def test_publish_does_not_notify_admin_when_disabled(self):
+        """publish() skips admin notification when PRICE_ERROR_NOTIFY_ADMIN=false."""
+        from unittest.mock import patch, MagicMock
+        from telegram.publisher import TelegramPublisher
+
+        offer = self._make_price_error_offer()
+        db = MagicMock()
+
+        with patch("telegram.publisher.settings") as ms, \
+             patch.object(TelegramPublisher, "_notify_admin_price_error") as mock_notify, \
+             patch.object(TelegramPublisher, "_send_message") as mock_send:
+            ms.TELEGRAM_BOT_TOKEN = "testtoken"
+            ms.TELEGRAM_CHANNEL_ID = "@testchannel"
+            ms.TELEGRAM_ADMIN_CHAT_ID = "999"
+            ms.PRICE_ERROR_NOTIFY_ADMIN = False
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "testtoken"
+            pub.channel_id = "@testchannel"
+            pub._base = "https://api.telegram.org/bottesttoken"
+            mock_send.return_value = {"message_id": 12}
+
+            pub.publish(offer, db)
+
+        mock_notify.assert_not_called()
+
+    def test_admin_notification_message_contains_key_info(self):
+        """Admin notification text must include product name, prices and discount."""
+        from unittest.mock import patch, MagicMock
+        from telegram.publisher import TelegramPublisher
+
+        offer = self._make_price_error_offer()
+        captured_payload = {}
+
+        def capture_post(endpoint, payload):
+            captured_payload.update(payload)
+            return {"message_id": 1}
+
+        with patch("telegram.publisher.settings") as ms, \
+             patch.object(TelegramPublisher, "_post", side_effect=capture_post):
+            ms.TELEGRAM_BOT_TOKEN = "testtoken"
+            ms.TELEGRAM_CHANNEL_ID = "@testchannel"
+            ms.TELEGRAM_ADMIN_CHAT_ID = "999"
+            ms.PRICE_ERROR_NOTIFY_ADMIN = True
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "testtoken"
+            pub.channel_id = "@testchannel"
+            pub._base = "https://api.telegram.org/bottesttoken"
+
+            pub._notify_admin_price_error(offer, "channel message")
+
+        text = captured_payload.get("text", "")
+        assert "PlayStation 5" in text
+        assert "11,999" in text  # original price
+        assert "1,200" in text   # error price
+        assert "90%" in text     # discount
+
+    def test_admin_notification_failure_does_not_block_channel_publish(self):
+        """A failing admin notification must NOT prevent the channel post."""
+        from unittest.mock import patch, MagicMock
+        from telegram.publisher import TelegramPublisher
+
+        offer = self._make_price_error_offer()
+        db = MagicMock()
+
+        def fail_notify(*args, **kwargs):
+            raise RuntimeError("Network error")
+
+        with patch("telegram.publisher.settings") as ms, \
+             patch.object(TelegramPublisher, "_notify_admin_price_error",
+                          side_effect=fail_notify), \
+             patch.object(TelegramPublisher, "_send_message") as mock_send:
+            ms.TELEGRAM_BOT_TOKEN = "testtoken"
+            ms.TELEGRAM_CHANNEL_ID = "@testchannel"
+            ms.TELEGRAM_ADMIN_CHAT_ID = "999"
+            ms.PRICE_ERROR_NOTIFY_ADMIN = True
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "testtoken"
+            pub.channel_id = "@testchannel"
+            pub._base = "https://api.telegram.org/bottesttoken"
+            mock_send.return_value = {"message_id": 13}
+
+            pub.publish(offer, db)
+
+        # Channel message was sent despite admin notification failure
+        mock_send.assert_called_once()
