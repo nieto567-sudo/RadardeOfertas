@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -80,6 +81,9 @@ class _RateState:
 
 # Module-level singleton — one per process.
 _rate_state = _RateState()
+# Protects concurrent reads/writes to _rate_state (relevant when Celery uses
+# a thread-based or gevent pool instead of the default prefork pool).
+_rate_lock = threading.Lock()
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -142,7 +146,8 @@ def can_publish(
         return GuardResult(allowed=False, reason="duplicado_24h")
 
     # 5. Rate limiting
-    rate_result = _check_rate_limit()
+    with _rate_lock:
+        rate_result = _check_rate_limit()
     if rate_result is not None:
         _log_discard("rate_limited", url, rate_result)
         return GuardResult(allowed=False, reason="rate_limited")
@@ -157,7 +162,8 @@ def record_published(url: str) -> None:
     """
     normalised = normalise_url(url)
     _add_to_published_store(normalised)
-    _update_rate_state()
+    with _rate_lock:
+        _update_rate_state()
     logger.info("published | url=%s", normalised)
 
 

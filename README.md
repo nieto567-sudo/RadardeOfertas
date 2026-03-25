@@ -147,12 +147,79 @@ docker-compose up -d worker beat
 
 ---
 
+## Despliegue en Railway ☁️
+
+Railway es el entorno de producción recomendado para RadardeOfertas: provisiona PostgreSQL y Redis automáticamente, y el repo ya incluye `railway.toml` y `Procfile` listos.
+
+### Prerequisitos
+
+- Cuenta en [Railway](https://railway.app) y Railway CLI instalado (`npm i -g @railway/cli` o descarga el binario).
+- Bot de Telegram configurado (ver checklist anterior).
+
+### Paso a paso
+
+```bash
+# 1. Autentícate y crea el proyecto
+railway login
+railway init          # en la raíz del repo clonado
+```
+
+En el dashboard de Railway:
+
+**2. Añade los plugins de infraestructura**
+- **New Service → Database → PostgreSQL** — Railway inyecta `DATABASE_URL` automáticamente.
+- **New Service → Database → Redis** — Railway inyecta `REDIS_URL` automáticamente.
+
+**3. Crea el servicio Worker (proceso principal)**
+- New Service → GitHub Repo → selecciona `RadardeOfertas`.
+- El `railway.toml` ya configura el build (Dockerfile) y el start command (`init-db` + worker).
+- En la pestaña **Variables**, añade:
+
+| Variable | Valor |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | `TU_TOKEN_AQUI` |
+| `TELEGRAM_CHANNEL_ID` | `@MI_CANAL_PUBLICO` |
+| `TELEGRAM_ADMIN_CHAT_ID` | `TU_CHAT_ID_AQUI` |
+| `TELEGRAM_ADMIN_USER_IDS` | `TU_CHAT_ID_AQUI` |
+| `MAX_DAILY_PUBLICATIONS` | `10` |
+| `ALLOWED_CATEGORIES` | `Celulares y Smartphones,Gaming y Videojuegos,Televisores y Audio,Electrodomésticos,Ropa y Accesorios` |
+| `DRY_RUN` | `false` (usa `true` para pruebas) |
+| `LOG_FORMAT` | `json` |
+
+> Las variables `DATABASE_URL` y `REDIS_URL` son inyectadas automáticamente por los plugins; **no** las añadas manualmente.
+
+**4. Crea el servicio Beat (scheduler)**
+- New Service → GitHub Repo → mismo repo, misma rama.
+- En **Settings → Deploy → Start Command** sobrescribe con:
+  ```
+  celery -A workers.celery_app beat --loglevel=info
+  ```
+- Copia las mismas variables de entorno que el worker (sin `MAX_DAILY_PUBLICATIONS` si quieres valor por defecto).
+
+**5. Despliega**
+
+```bash
+# Desde la CLI (o haz click en "Deploy" en el dashboard)
+railway up
+```
+
+Railway construirá la imagen Docker, iniciará `init-db` y levantará el worker y el beat automáticamente.
+
+### Notas importantes para Railway
+
+- **`DATABASE_URL`**: Railway inyecta el formato `postgres://...`. El código lo normaliza automáticamente a `postgresql://` (requerido por SQLAlchemy).
+- **Filesystem efímero**: `published_urls.json` se guarda en `/tmp` por defecto. El historial de 24h se reinicia si el contenedor se recicla, lo que puede provocar duplicados momentáneos. Esto es aceptable para el caso de uso.
+- **Celerybeat schedule**: el archivo `celerybeat-schedule` se genera en `/app` y se pierde al reiniciar. Celery beat lo regenera automáticamente; no hay pérdida funcional.
+- **Volúmenes (opcional)**: Railway soporta volúmenes persistentes. Si quieres deduplicación 100% persistente, monta un volumen en `/data` y configura `PUBLISHED_URLS_FILE=/data/published_urls.json`.
+
+---
+
 ## Variables de entorno
 
 | Variable | Descripción | Valor por defecto |
 |---|---|---|
-| `DATABASE_URL` | URL de PostgreSQL (`db` = servicio docker-compose) | `postgresql://radar:radar@db:5432/radardeofertas` |
-| `REDIS_URL` | URL de Redis (`redis` = servicio docker-compose) | `redis://redis:6379/0` |
+| `DATABASE_URL` | URL de PostgreSQL — Railway lo inyecta automáticamente | `postgresql://radar:radar@localhost:5432/radardeofertas` |
+| `REDIS_URL` | URL de Redis — Railway lo inyecta automáticamente | `redis://localhost:6379/0` |
 | `TELEGRAM_BOT_TOKEN` | Token del bot ([@BotFather](https://t.me/BotFather)) | — |
 | `TELEGRAM_CHANNEL_ID` | `@username` del canal público | — |
 | `TELEGRAM_ADMIN_CHAT_ID` | Tu chat_id para alertas de admin | — |
@@ -162,7 +229,7 @@ docker-compose up -d worker beat
 | `MAX_PUBLICATIONS_PER_HOUR` | Máximo de publicaciones por hora | `15` |
 | `MIN_SECONDS_BETWEEN_PUBLICATIONS` | Segundos mínimos entre publicaciones | `5` |
 | `DRY_RUN` | Modo prueba (no publica en Telegram) | `false` |
-| `PUBLISHED_URLS_FILE` | Archivo JSON para deduplicación 24h | `published_urls.json` |
+| `PUBLISHED_URLS_FILE` | Archivo JSON para deduplicación 24h | `/tmp/published_urls.json` |
 | `MONETIZED_LINKS_ENABLED` | Activar links de afiliado/UTM | `false` |
 | `MIN_PUBLISH_SCORE` | Score mínimo para publicar (0–100) | `60` |
 | `RAPID_DROP_THRESHOLD` | Caída mínima para alertar (0–1) | `0.30` |

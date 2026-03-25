@@ -12,6 +12,10 @@ DATABASE_URL: str = os.getenv(
     "DATABASE_URL",
     "postgresql://radar:radar@localhost:5432/radardeofertas",
 )
+# Railway (and some other PaaS platforms) inject DATABASE_URL with the legacy
+# "postgres://" scheme.  SQLAlchemy 1.4+ requires "postgresql://".
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
 
 # ── Redis / Celery ───────────────────────────────────────────────────────────
 REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -207,5 +211,6 @@ MIN_SECONDS_BETWEEN_PUBLICATIONS: int = int(
 DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 
 # Path for the JSON file that persists recently published URLs for 24h dedup.
-# Override with an absolute path if needed (e.g. inside a Docker volume).
-PUBLISHED_URLS_FILE: str = os.getenv("PUBLISHED_URLS_FILE", "published_urls.json")
+# Defaults to /tmp so it works on ephemeral filesystems (Railway, Heroku, etc.).
+# Override with a path inside a persistent volume when available.
+PUBLISHED_URLS_FILE: str = os.getenv("PUBLISHED_URLS_FILE", "/tmp/published_urls.json")
