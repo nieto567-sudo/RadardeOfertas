@@ -41,6 +41,7 @@ class _SimpleSearchScraper(BaseScraper):
         * _css_link   – CSS selector for link within a card
         * _css_img    – CSS selector for image within a card
         * _q_param    – query-string param name for the search term
+        * _extra_params – additional fixed query-string params (optional)
     """
 
     BASE_URL: str = ""
@@ -51,6 +52,7 @@ class _SimpleSearchScraper(BaseScraper):
     _css_link: str = "a[href]"
     _css_img: str = "img"
     _q_param: str = "q"
+    _extra_params: dict = {}
 
     def __init__(self) -> None:
         super().__init__()
@@ -66,7 +68,7 @@ class _SimpleSearchScraper(BaseScraper):
         return products
 
     def _scrape_search(self, query: str) -> list[ProductData]:
-        params = {self._q_param: query}
+        params = {self._q_param: query, **self._extra_params}
         try:
             soup = self.soup(self.SEARCH_URL, params=params)
         except requests.RequestException:
@@ -123,13 +125,21 @@ class _SimpleSearchScraper(BaseScraper):
 
 
 class CostcoScraper(_SimpleSearchScraper):
+    """Scraper for Costco Mexico.
+
+    Search URL pattern:
+      https://www.costco.com.mx/search?searchOption=mx-search-all&text=<query>
+    Example: https://www.costco.com.mx/search?searchOption=mx-search-all&text=celulares
+    """
+
     store_name = "costco"
     BASE_URL = "https://www.costco.com.mx"
     SEARCH_URL = "https://www.costco.com.mx/search"
     _css_card = "div[class*='product'], article[class*='product']"
     _css_name = "span[class*='description'], h3, [class*='product-title']"
     _css_price = "span[class*='price'], [class*='Price']"
-    _q_param = "q"
+    _q_param = "text"
+    _extra_params = {"searchOption": "mx-search-all"}
 
 
 class CoppelScraper(_SimpleSearchScraper):

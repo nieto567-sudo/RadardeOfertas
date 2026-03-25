@@ -85,7 +85,17 @@ class BaseScraper:
         """
         Perform a GET request with the shared session, a polite delay, and
         automatic retry with exponential backoff + jitter on transient errors.
+
+        Non-transient HTTP errors (400, 401, 403, 404) are raised immediately
+        without retrying — they indicate a permanent client-side issue (e.g.
+        wrong URL or forbidden resource) that will not resolve on its own.
+
+        Transient errors (429, 500, 502, 503, 504) and network/connection
+        errors are retried up to ``_MAX_RETRIES`` times.
         """
+        # HTTP status codes that should NOT be retried (permanent client errors)
+        _NO_RETRY_STATUSES = frozenset({400, 401, 403, 404})
+
         time.sleep(self.delay)
         last_exc: Optional[Exception] = None
         for attempt in range(1, _MAX_RETRIES + 1):
@@ -93,6 +103,37 @@ class BaseScraper:
                 resp = self.session.get(url, timeout=self.timeout, **kwargs)
                 resp.raise_for_status()
                 return resp
+            except requests.HTTPError as exc:
+                # Do not retry permanent client-side errors
+                if exc.response is not None and exc.response.status_code in _NO_RETRY_STATUSES:
+                    logger.warning(
+                        "[%s] GET %s returned %d — not retrying",
+                        self.store_name,
+                        url,
+                        exc.response.status_code,
+                    )
+                    raise
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    wait = _BACKOFF_BASE ** attempt + random.uniform(0, _JITTER_MAX)
+                    logger.warning(
+                        "[%s] GET %s failed (attempt %d/%d): %s — retrying in %.1fs",
+                        self.store_name,
+                        url,
+                        attempt,
+                        _MAX_RETRIES,
+                        exc,
+                        wait,
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.warning(
+                        "[%s] GET %s failed after %d attempts: %s",
+                        self.store_name,
+                        url,
+                        _MAX_RETRIES,
+                        exc,
+                    )
             except requests.RequestException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:

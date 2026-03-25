@@ -31,7 +31,15 @@ API_ITEM = "https://api.mercadolibre.com/items/{item_id}"
 
 
 class MercadoLibreScraper(BaseScraper):
-    """Scraper for MercadoLibre Mexico using their public Search API."""
+    """Scraper for MercadoLibre Mexico using their public Search API.
+
+    Uses the public REST API (no auth required):
+      https://api.mercadolibre.com/sites/MLM/search?q=<query>
+
+    Website search URL for reference (not used directly):
+      https://listado.mercadolibre.com.mx/<query>#D[A:<query>]
+    Example: https://listado.mercadolibre.com.mx/celulares#D[A:celulares]
+    """
 
     store_name = "mercadolibre"
 

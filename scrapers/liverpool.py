@@ -23,10 +23,15 @@ DEFAULT_QUERIES = [
 
 
 class LiverpoolScraper(BaseScraper):
-    """Scraper for Liverpool Mexico."""
+    """Scraper for Liverpool Mexico.
+
+    Search URL pattern: https://www.liverpool.com.mx/tienda?s=<query>
+    Example: https://www.liverpool.com.mx/tienda?s=celulares
+    """
 
     store_name = "liverpool"
-    SEARCH_URL = "https://www.liverpool.com.mx/tienda/busqueda"
+    BASE_URL = "https://www.liverpool.com.mx"
+    SEARCH_URL = "https://www.liverpool.com.mx/tienda"
 
     def __init__(self) -> None:
         super().__init__()
@@ -42,7 +47,7 @@ class LiverpoolScraper(BaseScraper):
         return products
 
     def _scrape_search(self, query: str) -> list[ProductData]:
-        params = {"search": query}
+        params = {"s": query}
         try:
             soup = self.soup(self.SEARCH_URL, params=params)
         except requests.RequestException:

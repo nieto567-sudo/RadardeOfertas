@@ -25,7 +25,17 @@ DEFAULT_QUERIES = [
 
 
 class BodegaAurreraScraper(BaseScraper):
-    """Scraper for Bodega Aurrerá Mexico."""
+    """Scraper for Bodega Aurrerá Mexico.
+
+    Uses text search as the primary approach:
+      https://www.bodegaaurrera.com.mx/search?q=<query>
+
+    Note: the platform also supports category browse URLs of the form:
+      https://www.bodegaaurrera.com.mx/browse/<query>/destacados-<query>/
+      destacados-<query>/264800_310034_310035?redirectQuery=<query>&search_redirect=true
+    These contain hard-coded department IDs and are therefore not suitable for
+    generic keyword searches; text search is used as the general fallback.
+    """
 
     store_name = "bodega_aurrera"
     SEARCH_URL = "https://www.bodegaaurrera.com.mx/search"
