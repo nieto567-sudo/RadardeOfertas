@@ -2654,17 +2654,22 @@ class TestPriceErrorAdminNotification:
         from unittest.mock import patch, MagicMock
         from telegram.publisher import TelegramPublisher
         from database.models import OfferType
+        from services.publication_guard import GuardResult
 
         offer = self._make_price_error_offer()
         db = MagicMock()
 
         with patch("telegram.publisher.settings") as ms, \
+             patch("telegram.publisher.can_publish",
+                   return_value=GuardResult(allowed=True, reason="ok")), \
+             patch("telegram.publisher.record_published"), \
              patch.object(TelegramPublisher, "_notify_admin_price_error") as mock_notify, \
              patch.object(TelegramPublisher, "_send_message") as mock_send:
             ms.TELEGRAM_BOT_TOKEN = "testtoken"
             ms.TELEGRAM_CHANNEL_ID = "@testchannel"
             ms.TELEGRAM_ADMIN_CHAT_ID = "999"
             ms.PRICE_ERROR_NOTIFY_ADMIN = True
+            ms.DRY_RUN = False
 
             pub = TelegramPublisher.__new__(TelegramPublisher)
             pub.token = "testtoken"
@@ -2680,17 +2685,22 @@ class TestPriceErrorAdminNotification:
         """publish() must NOT call _notify_admin_price_error for non-price-error offers."""
         from unittest.mock import patch, MagicMock
         from telegram.publisher import TelegramPublisher
+        from services.publication_guard import GuardResult
 
         offer = self._make_non_price_error_offer()
         db = MagicMock()
 
         with patch("telegram.publisher.settings") as ms, \
+             patch("telegram.publisher.can_publish",
+                   return_value=GuardResult(allowed=True, reason="ok")), \
+             patch("telegram.publisher.record_published"), \
              patch.object(TelegramPublisher, "_notify_admin_price_error") as mock_notify, \
              patch.object(TelegramPublisher, "_send_message") as mock_send:
             ms.TELEGRAM_BOT_TOKEN = "testtoken"
             ms.TELEGRAM_CHANNEL_ID = "@testchannel"
             ms.TELEGRAM_ADMIN_CHAT_ID = "999"
             ms.PRICE_ERROR_NOTIFY_ADMIN = True
+            ms.DRY_RUN = False
 
             pub = TelegramPublisher.__new__(TelegramPublisher)
             pub.token = "testtoken"
@@ -2706,17 +2716,22 @@ class TestPriceErrorAdminNotification:
         """publish() skips admin notification when PRICE_ERROR_NOTIFY_ADMIN=false."""
         from unittest.mock import patch, MagicMock
         from telegram.publisher import TelegramPublisher
+        from services.publication_guard import GuardResult
 
         offer = self._make_price_error_offer()
         db = MagicMock()
 
         with patch("telegram.publisher.settings") as ms, \
+             patch("telegram.publisher.can_publish",
+                   return_value=GuardResult(allowed=True, reason="ok")), \
+             patch("telegram.publisher.record_published"), \
              patch.object(TelegramPublisher, "_notify_admin_price_error") as mock_notify, \
              patch.object(TelegramPublisher, "_send_message") as mock_send:
             ms.TELEGRAM_BOT_TOKEN = "testtoken"
             ms.TELEGRAM_CHANNEL_ID = "@testchannel"
             ms.TELEGRAM_ADMIN_CHAT_ID = "999"
             ms.PRICE_ERROR_NOTIFY_ADMIN = False
+            ms.DRY_RUN = False
 
             pub = TelegramPublisher.__new__(TelegramPublisher)
             pub.token = "testtoken"
@@ -2764,6 +2779,7 @@ class TestPriceErrorAdminNotification:
         """A failing admin notification must NOT prevent the channel post."""
         from unittest.mock import patch, MagicMock
         from telegram.publisher import TelegramPublisher
+        from services.publication_guard import GuardResult
 
         offer = self._make_price_error_offer()
         db = MagicMock()
@@ -2772,6 +2788,9 @@ class TestPriceErrorAdminNotification:
             raise RuntimeError("Network error")
 
         with patch("telegram.publisher.settings") as ms, \
+             patch("telegram.publisher.can_publish",
+                   return_value=GuardResult(allowed=True, reason="ok")), \
+             patch("telegram.publisher.record_published"), \
              patch.object(TelegramPublisher, "_notify_admin_price_error",
                           side_effect=fail_notify), \
              patch.object(TelegramPublisher, "_send_message") as mock_send:
@@ -2779,6 +2798,7 @@ class TestPriceErrorAdminNotification:
             ms.TELEGRAM_CHANNEL_ID = "@testchannel"
             ms.TELEGRAM_ADMIN_CHAT_ID = "999"
             ms.PRICE_ERROR_NOTIFY_ADMIN = True
+            ms.DRY_RUN = False
 
             pub = TelegramPublisher.__new__(TelegramPublisher)
             pub.token = "testtoken"
@@ -2790,3 +2810,334 @@ class TestPriceErrorAdminNotification:
 
         # Channel message was sent despite admin notification failure
         mock_send.assert_called_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PublicationGuard
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestPublicationGuard:
+    """Tests for services.publication_guard."""
+
+    # ── URL normalisation ─────────────────────────────────────────────────────
+
+    def test_normalise_strips_utm_params(self):
+        from services.publication_guard import normalise_url
+        raw = "https://www.amazon.com.mx/dp/B08N5?utm_source=fb&utm_medium=social"
+        result = normalise_url(raw)
+        assert "utm_source" not in result
+        assert "utm_medium" not in result
+        assert "amazon.com.mx" in result
+
+    def test_normalise_strips_ref_param(self):
+        from services.publication_guard import normalise_url
+        raw = "https://www.walmart.com.mx/p/123?color=rojo&ref=home"
+        result = normalise_url(raw)
+        assert "ref=" not in result
+        assert "color=rojo" in result
+
+    def test_normalise_strips_fbclid(self):
+        from services.publication_guard import normalise_url
+        raw = "https://example.com/p?id=1&fbclid=abc123"
+        result = normalise_url(raw)
+        assert "fbclid" not in result
+        assert "id=1" in result
+
+    def test_normalise_strips_fragment(self):
+        from services.publication_guard import normalise_url
+        raw = "https://example.com/p?id=1#section"
+        result = normalise_url(raw)
+        assert "#section" not in result
+
+    def test_normalise_preserves_non_tracking_params(self):
+        from services.publication_guard import normalise_url
+        raw = "https://example.com/product?sku=ABC&color=blue"
+        result = normalise_url(raw)
+        assert "sku=ABC" in result
+        assert "color=blue" in result
+
+    def test_normalise_url_no_params(self):
+        from services.publication_guard import normalise_url
+        raw = "https://www.liverpool.com.mx/p/tv-55"
+        assert normalise_url(raw) == raw
+
+    # ── Category whitelist ────────────────────────────────────────────────────
+
+    def test_allowed_category_passes(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Celulares y Smartphones"]), \
+             patch.object(publication_guard.settings, "MAX_PUBLICATIONS_PER_HOUR", 100), \
+             patch.object(publication_guard.settings, "MIN_SECONDS_BETWEEN_PUBLICATIONS", 0), \
+             patch("services.publication_guard.is_duplicate", return_value=False):
+            result = publication_guard.can_publish(
+                "https://example.com/p", 999.0, "Celulares y Smartphones"
+            )
+        assert result.allowed is True
+
+    def test_disallowed_category_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Celulares y Smartphones"]):
+            result = publication_guard.can_publish(
+                "https://example.com/p", 999.0, "Libros y Educación"
+            )
+        assert result.allowed is False
+        assert result.reason == "categoria_no_permitida"
+
+    def test_empty_category_rejected(self):
+        from services import publication_guard
+        result = publication_guard.can_publish("https://example.com/p", 999.0, "")
+        assert result.allowed is False
+        assert result.reason == "categoria_vacia"
+
+    def test_none_category_rejected(self):
+        from services import publication_guard
+        result = publication_guard.can_publish("https://example.com/p", 999.0, None)
+        assert result.allowed is False
+        assert result.reason == "categoria_vacia"
+
+    # ── Price validation ──────────────────────────────────────────────────────
+
+    def test_none_price_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Gaming y Videojuegos"]):
+            result = publication_guard.can_publish(
+                "https://example.com/p", None, "Gaming y Videojuegos"
+            )
+        assert result.allowed is False
+        assert result.reason == "sin_precio"
+
+    def test_zero_price_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Gaming y Videojuegos"]):
+            result = publication_guard.can_publish(
+                "https://example.com/p", 0.0, "Gaming y Videojuegos"
+            )
+        assert result.allowed is False
+        assert result.reason == "precio_invalido"
+
+    def test_negative_price_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Gaming y Videojuegos"]):
+            result = publication_guard.can_publish(
+                "https://example.com/p", -10.0, "Gaming y Videojuegos"
+            )
+        assert result.allowed is False
+        assert result.reason == "precio_invalido"
+
+    # ── URL validation ────────────────────────────────────────────────────────
+
+    def test_empty_url_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Electrodomésticos"]):
+            result = publication_guard.can_publish("", 500.0, "Electrodomésticos")
+        assert result.allowed is False
+        assert result.reason == "sin_url"
+
+    def test_invalid_url_scheme_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Electrodomésticos"]):
+            result = publication_guard.can_publish(
+                "ftp://example.com/product", 500.0, "Electrodomésticos"
+            )
+        assert result.allowed is False
+        assert result.reason == "url_invalida"
+
+    def test_http_url_accepted(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Electrodomésticos"]), \
+             patch.object(publication_guard.settings, "MAX_PUBLICATIONS_PER_HOUR", 100), \
+             patch.object(publication_guard.settings, "MIN_SECONDS_BETWEEN_PUBLICATIONS", 0), \
+             patch("services.publication_guard.is_duplicate", return_value=False):
+            result = publication_guard.can_publish(
+                "http://example.com/product", 500.0, "Electrodomésticos"
+            )
+        assert result.allowed is True
+
+    # ── 24-hour deduplication ─────────────────────────────────────────────────
+
+    def test_duplicate_url_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Televisores y Audio"]), \
+             patch("services.publication_guard.is_duplicate", return_value=True):
+            result = publication_guard.can_publish(
+                "https://example.com/tv", 2999.0, "Televisores y Audio"
+            )
+        assert result.allowed is False
+        assert result.reason == "duplicado_24h"
+
+    def test_non_duplicate_passes(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Televisores y Audio"]), \
+             patch.object(publication_guard.settings, "MAX_PUBLICATIONS_PER_HOUR", 100), \
+             patch.object(publication_guard.settings, "MIN_SECONDS_BETWEEN_PUBLICATIONS", 0), \
+             patch("services.publication_guard.is_duplicate", return_value=False):
+            result = publication_guard.can_publish(
+                "https://example.com/tv", 2999.0, "Televisores y Audio"
+            )
+        assert result.allowed is True
+
+    def test_is_duplicate_false_for_unknown_url(self):
+        """is_duplicate returns False for a URL not in an empty store."""
+        import json
+        import tempfile
+        import os
+        from services import publication_guard
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({}, f)
+            tmp_path = f.name
+        try:
+            with patch.object(publication_guard.settings, "PUBLISHED_URLS_FILE", tmp_path):
+                assert publication_guard.is_duplicate("https://example.com/p") is False
+        finally:
+            os.unlink(tmp_path)
+
+    def test_is_duplicate_true_after_record_published(self):
+        """A URL is a duplicate right after record_published()."""
+        import tempfile
+        import os
+        from services import publication_guard
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{}")
+            tmp_path = f.name
+        try:
+            with patch.object(publication_guard.settings, "PUBLISHED_URLS_FILE", tmp_path):
+                url = "https://www.walmart.com.mx/p/unique-item-xyz"
+                normalised = publication_guard.normalise_url(url)
+                publication_guard._add_to_published_store(normalised)
+                assert publication_guard.is_duplicate(normalised) is True
+        finally:
+            os.unlink(tmp_path)
+
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+
+    def test_rate_limit_hourly_cap(self):
+        from services import publication_guard
+        from services.publication_guard import _RateState
+        # Simulate a full window
+        fake_state = _RateState(window_count=100, window_start_ts=0.0)
+        with patch("services.publication_guard._rate_state", fake_state), \
+             patch.object(publication_guard.settings, "MAX_PUBLICATIONS_PER_HOUR", 5), \
+             patch.object(publication_guard.settings, "MIN_SECONDS_BETWEEN_PUBLICATIONS", 0), \
+             patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Ropa y Accesorios"]), \
+             patch("services.publication_guard.is_duplicate", return_value=False):
+            # window_age > 3600 so the window resets; force window_count back up
+            fake_state.window_start_ts = publication_guard.time.monotonic()
+            fake_state.window_count = 5  # at cap
+            result = publication_guard.can_publish(
+                "https://example.com/p", 99.0, "Ropa y Accesorios"
+            )
+        assert result.allowed is False
+        assert result.reason == "rate_limited"
+
+    def test_rate_limit_min_gap(self):
+        from services import publication_guard
+        from services.publication_guard import _RateState
+        import time as _time
+        # last publish was just now
+        fake_state = _RateState(
+            last_publish_ts=_time.monotonic(),
+            window_count=0,
+            window_start_ts=_time.monotonic(),
+        )
+        with patch("services.publication_guard._rate_state", fake_state), \
+             patch.object(publication_guard.settings, "MAX_PUBLICATIONS_PER_HOUR", 100), \
+             patch.object(publication_guard.settings, "MIN_SECONDS_BETWEEN_PUBLICATIONS", 60), \
+             patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Ropa y Accesorios"]), \
+             patch("services.publication_guard.is_duplicate", return_value=False):
+            result = publication_guard.can_publish(
+                "https://example.com/p", 99.0, "Ropa y Accesorios"
+            )
+        assert result.allowed is False
+        assert result.reason == "rate_limited"
+
+    # ── Publisher integration ─────────────────────────────────────────────────
+
+    def test_publisher_discards_bad_category(self):
+        """TelegramPublisher.publish returns a failed Publication for bad category."""
+        from telegram.publisher import TelegramPublisher
+        from unittest.mock import MagicMock
+        from services.publication_guard import GuardResult
+
+        offer = MagicMock()
+        offer.id = 1
+        offer.current_price = 999.0
+        offer.affiliate_url = None
+        offer.product.url = "https://example.com/p"
+        offer.product.category = "Mascotas"  # not in whitelist
+        offer.product.image_url = None
+
+        db = MagicMock()
+
+        with patch("services.publication_guard.settings") as gs, \
+             patch("telegram.publisher.settings") as ts:
+            gs.ALLOWED_CATEGORIES = ["Celulares y Smartphones"]
+            gs.MAX_PUBLICATIONS_PER_HOUR = 100
+            gs.MIN_SECONDS_BETWEEN_PUBLICATIONS = 0
+            gs.PUBLISHED_URLS_FILE = "/tmp/test_guard_pub.json"
+            ts.DRY_RUN = False
+            ts.TELEGRAM_BOT_TOKEN = "tok"
+            ts.TELEGRAM_CHANNEL_ID = "@ch"
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "tok"
+            pub.channel_id = "@ch"
+            pub._base = "https://api.telegram.org/bottok"
+
+            result = pub.publish(offer, db)
+
+        assert result.success is False
+        assert result.error_message == "categoria_no_permitida"
+
+    def test_publisher_dry_run_does_not_send(self):
+        """In DRY_RUN mode the publisher never calls the Telegram API."""
+        from telegram.publisher import TelegramPublisher
+        from unittest.mock import MagicMock
+
+        offer = MagicMock()
+        offer.id = 2
+        offer.current_price = 1500.0
+        offer.affiliate_url = None
+        offer.product.url = "https://example.com/tv"
+        offer.product.category = "Televisores y Audio"
+        offer.product.image_url = None
+
+        db = MagicMock()
+
+        with patch("services.publication_guard.settings") as gs, \
+             patch("telegram.publisher.settings") as ts, \
+             patch("services.publication_guard.is_duplicate", return_value=False), \
+             patch.object(TelegramPublisher, "_send_message") as mock_send, \
+             patch.object(TelegramPublisher, "_send_photo") as mock_photo:
+            gs.ALLOWED_CATEGORIES = ["Televisores y Audio"]
+            gs.MAX_PUBLICATIONS_PER_HOUR = 100
+            gs.MIN_SECONDS_BETWEEN_PUBLICATIONS = 0
+            gs.PUBLISHED_URLS_FILE = "/tmp/test_guard_dry.json"
+            ts.DRY_RUN = True
+            ts.TELEGRAM_BOT_TOKEN = "tok"
+            ts.TELEGRAM_CHANNEL_ID = "@ch"
+            ts.PRICE_ERROR_NOTIFY_ADMIN = False
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "tok"
+            pub.channel_id = "@ch"
+            pub._base = "https://api.telegram.org/bottok"
+
+            result = pub.publish(offer, db)
+
+        mock_send.assert_not_called()
+        mock_photo.assert_not_called()
+        assert result.success is False
+        assert result.error_message == "dry_run"

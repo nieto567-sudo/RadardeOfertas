@@ -180,3 +180,32 @@ DEDUP_CROSS_STORE: bool = os.getenv("DEDUP_CROSS_STORE", "false").lower() == "tr
 REQUIRE_IMAGE: bool = os.getenv("REQUIRE_IMAGE", "false").lower() == "true"
 # Minimum product title length (shorter titles are rejected as garbage).
 MIN_TITLE_LENGTH: int = int(os.getenv("MIN_TITLE_LENGTH", "10"))
+
+# ── Publication guard ─────────────────────────────────────────────────────────
+# Whitelist of allowed categories (comma-separated).  Offers whose category
+# does not appear in this list are silently discarded before publishing.
+# Default matches the five categories defined in the product classifier.
+_ALLOWED_CATEGORIES_RAW: str = os.getenv(
+    "ALLOWED_CATEGORIES",
+    "Celulares y Smartphones,Gaming y Videojuegos,Televisores y Audio,"
+    "Electrodomésticos,Ropa y Accesorios",
+)
+ALLOWED_CATEGORIES: list[str] = [
+    c.strip() for c in _ALLOWED_CATEGORIES_RAW.split(",") if c.strip()
+]
+
+# Maximum publications per rolling 60-minute window.
+MAX_PUBLICATIONS_PER_HOUR: int = int(os.getenv("MAX_PUBLICATIONS_PER_HOUR", "15"))
+
+# Minimum seconds that must pass between any two consecutive publications.
+MIN_SECONDS_BETWEEN_PUBLICATIONS: int = int(
+    os.getenv("MIN_SECONDS_BETWEEN_PUBLICATIONS", "5")
+)
+
+# Dry-run mode: when "true" no message is actually sent to Telegram.
+# All other logic (validation, dedup tracking) runs normally.
+DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
+
+# Path for the JSON file that persists recently published URLs for 24h dedup.
+# Override with an absolute path if needed (e.g. inside a Docker volume).
+PUBLISHED_URLS_FILE: str = os.getenv("PUBLISHED_URLS_FILE", "published_urls.json")
