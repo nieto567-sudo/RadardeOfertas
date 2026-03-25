@@ -1,10 +1,9 @@
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  RadardeOfertas – Railway configuration                                  ║
 # ║                                                                          ║
-# ║  This file configures the DEFAULT service (Celery worker).               ║
-# ║  For the beat scheduler, create a second Railway service from the same   ║
-# ║  repo and override startCommand to:                                      ║
-# ║    celery -A workers.celery_app beat --loglevel=info                     ║
+# ║  This file configures the DEFAULT service (publish loop).                ║
+# ║  The service initialises the DB schema and then runs the scrape-and-     ║
+# ║  publish loop that finds offers and posts them to the Telegram channel.  ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 [build]
@@ -12,8 +11,9 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Initialise the DB schema then start the Celery worker.
+# Initialise the DB schema then start the offer-publishing loop.
 # `init-db` is idempotent (CREATE TABLE IF NOT EXISTS), safe to run on every start.
-startCommand = "python main.py init-db && celery -A workers.celery_app worker --loglevel=info --concurrency=4"
+# `run-loop --interval 300` scrapes offers and posts them to Telegram every 300 s.
+startCommand = "python main.py init-db && python main.py run-loop --interval 300"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
