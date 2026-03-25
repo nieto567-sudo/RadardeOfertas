@@ -6,7 +6,7 @@ Sistema automatizado que detecta ofertas reales, errores de precio y oportunidad
 
 ## Características
 
-- 🕷️ **Scrapers para 25+ tiendas**: Amazon MX, MercadoLibre, Walmart, Liverpool, Bodega Aurrerá, Costco, Coppel, Elektra, Sears, Sanborns, Sam's Club, Office Depot, OfficeMax, Soriana, Cyberpuerta, DDTech, PCEL, Intercompras, Gameplanet, Claro Shop, AliExpress, eBay, Newegg, Banggood, Gearbest.
+- 🕷️ **Scrapers para 20+ tiendas mexicanas**: Amazon MX, MercadoLibre, Walmart, Liverpool, Bodega Aurrerá, Costco, Coppel, Elektra, Sears, Sanborns, Sam's Club, Office Depot, OfficeMax, Soriana, Cyberpuerta, DDTech, PCEL, Intercompras, Gameplanet, Claro Shop.
 - 📊 **Análisis histórico de precios** con PostgreSQL.
 - ⚡ **Detección de caída rápida de precio** (configurable).
 - 🎯 **Motor de scoring de ofertas** (0–100 pts).
@@ -35,7 +35,6 @@ RadardeOfertas/
 │   ├── bodega_aurrera.py    # Bodega Aurrerá
 │   ├── retailers_mx.py      # Costco, Coppel, Elektra, Sears, Sanborns, Sam's, OD, OM, Soriana
 │   ├── tech_stores.py       # Cyberpuerta, DDTech, PCEL, Intercompras, Gameplanet, ClaroShop
-│   ├── international.py     # AliExpress, eBay, Newegg, Banggood, Gearbest
 │   └── manager.py           # ScraperManager – orquesta todos los scrapers
 ├── services/
 │   ├── price_analyzer.py    # Análisis de precios + detección de caída rápida
@@ -172,7 +171,7 @@ celery -A workers.celery_app beat --loglevel=info
 |---|---|
 | Amazon, MercadoLibre | Cada 5 min |
 | Walmart, Liverpool, Bodega Aurrerá | Cada 10 min |
-| Resto de tiendas | Cada 15 min |
+| Resto de tiendas mexicanas | Cada 15 min |
 
 ---
 
@@ -188,24 +187,13 @@ MONETIZED_LINKS_ENABLED=false   # valor por defecto; no es necesario incluirlo
 
 ### Activar monetización en el futuro
 
-Cuando quieras empezar a generar comisiones, basta con cambiar **una variable** en tu `.env` y configurar los tokens de los programas de afiliado que uses:
+Cuando quieras empezar a generar comisiones, basta con cambiar **una variable** en tu `.env` y añadir la lógica del programa de afiliado en `services/affiliate.py`:
 
 ```env
 MONETIZED_LINKS_ENABLED=true
-
-# Amazon Associates
-AMAZON_AFFILIATE_TAG=tuetiqueta-20
-
-# Bitly (acortador + contador de clics)
-BITLY_API_TOKEN=tu_token_bitly
 ```
 
-No es necesario modificar ningún archivo de código; el flag `MONETIZED_LINKS_ENABLED` activa automáticamente:
-
-- Tags de afiliado por tienda (Amazon, MercadoLibre, AliExpress, eBay, Admitad).
-- Parámetros UTM en todos los links (`utm_source`, `utm_medium`, `utm_campaign`).
-- Acortamiento con Bitly y registro de clics.
-- Registro de comisiones estimadas en base de datos.
+El flag `MONETIZED_LINKS_ENABLED=true` activa automáticamente la ruta `build_monetized_link` en `services/link_builder.py`.  Implementa el programa de afiliado que quieras usar en `services/affiliate.py` y el bot comenzará a usarlo sin más cambios de código.
 
 ---
 

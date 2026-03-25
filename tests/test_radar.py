@@ -150,72 +150,64 @@ class TestOfferScorerClassifyScore:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Affiliate link generation (stub – no affiliate APIs are active)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 class TestAffiliateLinks:
-    """Tests for the affiliate URL builder."""
+    """
+    Tests for the affiliate URL stub.
 
-    def test_amazon_adds_tag(self):
-        from services import affiliate
-        with patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", "testtag-20"):
-            url = affiliate.get_affiliate_url(
-                "https://www.amazon.com.mx/dp/B08N5WRWNW", "amazon"
-            )
-        assert "tag=testtag-20" in url
+    Affiliate API integrations have been removed.  ``get_affiliate_url`` now
+    returns the input URL unchanged regardless of store or configuration.
+    """
 
-    def test_amazon_no_tag_returns_original(self):
+    def test_amazon_returns_original_url(self):
         from services import affiliate
         original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
-        with patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", ""), \
-             patch.object(affiliate.settings, "BITLY_API_TOKEN", ""), \
-             patch.object(affiliate.settings, "UTM_SOURCE", "radar"), \
-             patch.object(affiliate.settings, "UTM_MEDIUM", "telegram"), \
-             patch.object(affiliate.settings, "UTM_CAMPAIGN", "oferta"):
-            url = affiliate.get_affiliate_url(original, "amazon")
-        # No affiliate tag → no ?tag= param, but UTM params are always added
-        assert "tag=" not in url
-        assert "utm_source=radar" in url
+        result = affiliate.get_affiliate_url(original, "amazon")
+        assert result == original
 
-    def test_mercadolibre_adds_aff_id(self):
+    def test_amazon_no_affiliate_tag_added(self):
         from services import affiliate
-        with patch.object(affiliate.settings, "MERCADOLIBRE_AFFILIATE_ID", "ml123"):
-            url = affiliate.get_affiliate_url(
-                "https://www.mercadolibre.com.mx/laptop", "mercadolibre"
-            )
-        assert "aff_id=ml123" in url
+        original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+        result = affiliate.get_affiliate_url(original, "amazon")
+        assert "tag=" not in result
 
-    def test_aliexpress_returns_portal_url(self):
-        from urllib.parse import urlparse
+    def test_mercadolibre_returns_original_url(self):
         from services import affiliate
-        with patch.object(affiliate.settings, "ALIEXPRESS_AFFILIATE_KEY", "alikey"):
-            url = affiliate.get_affiliate_url(
-                "https://www.aliexpress.com/item/123.html", "aliexpress"
-            )
-        parsed = urlparse(url)
-        assert parsed.scheme == "https"
-        assert parsed.netloc == "portals.aliexpress.com"
-        assert "alikey" in url
+        original = "https://www.mercadolibre.com.mx/laptop"
+        result = affiliate.get_affiliate_url(original, "mercadolibre")
+        assert result == original
 
-    def test_ebay_returns_rover_url(self):
-        from urllib.parse import urlparse
+    def test_walmart_returns_original_url(self):
         from services import affiliate
-        with patch.object(affiliate.settings, "EBAY_CAMPAIGN_ID", "5338-12345-6"):
-            url = affiliate.get_affiliate_url(
-                "https://www.ebay.com/itm/123", "ebay"
-            )
-        parsed = urlparse(url)
-        assert parsed.scheme == "https"
-        assert parsed.netloc == "rover.ebay.com"
+        original = "https://www.walmart.com.mx/producto/1234"
+        result = affiliate.get_affiliate_url(original, "walmart")
+        assert result == original
 
     def test_unknown_store_returns_original(self):
         from services import affiliate
         original = "https://unknown-store.com/product/1"
-        with patch.object(affiliate.settings, "BITLY_API_TOKEN", ""), \
-             patch.object(affiliate.settings, "UTM_SOURCE", "radar"), \
-             patch.object(affiliate.settings, "UTM_MEDIUM", "telegram"), \
-             patch.object(affiliate.settings, "UTM_CAMPAIGN", "oferta"):
-            url = affiliate.get_affiliate_url(original, "unknown_store")
-        # No affiliate programme → base URL is unchanged, but UTM params still added
-        assert "unknown-store.com/product/1" in url
-        assert "utm_source=radar" in url
+        result = affiliate.get_affiliate_url(original, "unknown_store")
+        assert result == original
+
+    def test_no_utm_params_added(self):
+        """Affiliate stub must not inject UTM tracking parameters."""
+        from services import affiliate
+        original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+        result = affiliate.get_affiliate_url(original, "amazon")
+        assert "utm_source" not in result
+        assert "utm_medium" not in result
+        assert "utm_campaign" not in result
+
+    def test_no_bitly_shortening(self):
+        """Affiliate stub must not produce shortened Bitly URLs."""
+        from services import affiliate
+        original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+        result = affiliate.get_affiliate_url(original, "amazon")
+        assert "bit.ly" not in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -278,40 +270,36 @@ class TestLinkBuilder:
 
     # ── Monetised mode (MONETIZED_LINKS_ENABLED=true) ────────────────────────
 
-    def test_build_offer_link_monetised_mode_adds_affiliate_tag(self):
-        """With monetisation enabled, the Amazon affiliate tag is applied."""
-        from services import link_builder, affiliate
-        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", True), \
-             patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", "testtag-20"), \
-             patch.object(affiliate.settings, "BITLY_API_TOKEN", ""):
+    def test_build_offer_link_monetised_mode_returns_url(self):
+        """
+        With monetization enabled, build_offer_link delegates to the affiliate
+        stub which currently also returns the URL unchanged.  This test ensures
+        the flag is respected and no exception is raised.
+        """
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", True):
             result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
-        assert "tag=testtag-20" in result
-
-    def test_build_offer_link_monetised_mode_adds_utm(self):
-        """With monetisation enabled, UTM parameters are added."""
-        from services import link_builder, affiliate
-        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", True), \
-             patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", ""), \
-             patch.object(affiliate.settings, "BITLY_API_TOKEN", ""), \
-             patch.object(affiliate.settings, "UTM_SOURCE", "radardeofertas"), \
-             patch.object(affiliate.settings, "UTM_MEDIUM", "telegram"), \
-             patch.object(affiliate.settings, "UTM_CAMPAIGN", "oferta"):
-            result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
-        assert "utm_source=radardeofertas" in result
+        # Affiliate stub returns the URL unchanged even in monetised mode
+        assert result == self._AMAZON_URL
 
     # ── build_direct_link / build_monetized_link unit-level ──────────────────
 
     def test_build_monetized_link_delegates_to_get_affiliate_url(self):
         """build_monetized_link must produce the same result as get_affiliate_url."""
         from services import link_builder, affiliate
-        with patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", "my-tag-20"), \
-             patch.object(affiliate.settings, "BITLY_API_TOKEN", ""), \
-             patch.object(affiliate.settings, "UTM_SOURCE", "s"), \
-             patch.object(affiliate.settings, "UTM_MEDIUM", "m"), \
-             patch.object(affiliate.settings, "UTM_CAMPAIGN", "c"):
-            expected = affiliate.get_affiliate_url(self._AMAZON_URL, "amazon")
-            result = link_builder.build_monetized_link(self._AMAZON_URL, "amazon")
+        expected = affiliate.get_affiliate_url(self._AMAZON_URL, "amazon")
+        result = link_builder.build_monetized_link(self._AMAZON_URL, "amazon")
         assert result == expected
+
+    def test_build_monetized_link_uses_affiliate_implementation(self):
+        """build_monetized_link must delegate: if get_affiliate_url is replaced,
+        build_monetized_link reflects the new output."""
+        from unittest.mock import patch
+        from services import link_builder
+        monetized_url = "https://example.com/monetized"
+        with patch("services.link_builder.get_affiliate_url", return_value=monetized_url):
+            result = link_builder.build_monetized_link(self._AMAZON_URL, "amazon")
+        assert result == monetized_url
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -610,161 +598,94 @@ class TestRevenueTrackerEstimates:
 
 
 class TestUTMParameters:
-    """Tests for UTM parameter injection."""
+    """
+    UTM parameter injection has been removed with the affiliate APIs.
+    These tests verify the new behaviour: no UTM params are ever added.
+    """
 
-    def test_utm_added_to_plain_url(self):
-        from services.affiliate import _apply_utm
-        from unittest.mock import patch
+    def test_no_utm_params_on_mexican_store_url(self):
+        from services.affiliate import get_affiliate_url
+        url = "https://www.walmart.com.mx/product/1"
+        result = get_affiliate_url(url, "walmart")
+        assert "utm_source" not in result
+        assert "utm_medium" not in result
+        assert "utm_campaign" not in result
 
-        with patch("services.affiliate.settings") as ms:
-            ms.UTM_SOURCE = "radardeofertas"
-            ms.UTM_MEDIUM = "telegram"
-            ms.UTM_CAMPAIGN = "oferta"
-            url = _apply_utm("https://www.walmart.com.mx/product/1", "walmart")
+    def test_no_utm_params_on_amazon_url(self):
+        from services.affiliate import get_affiliate_url
+        url = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+        result = get_affiliate_url(url, "amazon")
+        assert "utm_source" not in result
 
-        assert "utm_source=radardeofertas" in url
-        assert "utm_medium=telegram" in url
-        assert "utm_campaign=oferta" in url
-        assert "utm_content=walmart" in url
-
-    def test_utm_preserves_existing_params(self):
-        from services.affiliate import _apply_utm
-        from unittest.mock import patch
-
-        with patch("services.affiliate.settings") as ms:
-            ms.UTM_SOURCE = "radar"
-            ms.UTM_MEDIUM = "telegram"
-            ms.UTM_CAMPAIGN = "deal"
-            url = _apply_utm(
-                "https://www.liverpool.com.mx/tienda?color=rojo", "liverpool"
-            )
-
-        assert "color=rojo" in url
-        assert "utm_source=radar" in url
-
-    def test_utm_does_not_crash_on_bad_url(self):
-        from services.affiliate import _apply_utm
-        from unittest.mock import patch
-
-        with patch("services.affiliate.settings") as ms:
-            ms.UTM_SOURCE = "r"
-            ms.UTM_MEDIUM = "t"
-            ms.UTM_CAMPAIGN = "o"
-            # Should return url unchanged if it can't parse
-            result = _apply_utm("not-a-valid-url", "store")
-        assert result  # must return something, not raise
+    def test_url_returned_unchanged(self):
+        from services.affiliate import get_affiliate_url
+        url = "https://www.liverpool.com.mx/tienda?color=rojo"
+        result = get_affiliate_url(url, "liverpool")
+        assert result == url
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Affiliate – Admitad deep links
+# Affiliate – Admitad deep links (removed)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestAdmitadAffiliateLinks:
-    """Tests for Admitad deep-link generation."""
+    """
+    Admitad deep-link generation has been removed with the affiliate APIs.
+    These tests verify that store URLs are returned unchanged.
+    """
 
-    def test_admitad_url_format(self):
-        from services.affiliate import _admitad
-        from urllib.parse import urlparse
-        from unittest.mock import patch
-
-        with patch("services.affiliate.settings") as ms:
-            ms.ADMITAD_PUBLISHER_ID = "mypub"
-            ms.ADMITAD_SITE_IDS = {"walmart": "site99"}
-            url = _admitad("https://www.walmart.com.mx/product", "walmart")
-
-        parsed = urlparse(url)
-        assert parsed.netloc == "ad.admitad.com"
-        assert "site99" in url
-        assert "mypub" in url
-
-    def test_admitad_no_publisher_returns_original(self):
-        from services.affiliate import _admitad
-        from unittest.mock import patch
-
+    def test_walmart_url_unchanged(self):
+        from services.affiliate import get_affiliate_url
         original = "https://www.walmart.com.mx/product"
-        with patch("services.affiliate.settings") as ms:
-            ms.ADMITAD_PUBLISHER_ID = ""
-            ms.ADMITAD_SITE_IDS = {"walmart": "site99"}
-            url = _admitad(original, "walmart")
+        assert get_affiliate_url(original, "walmart") == original
 
-        assert url == original
+    def test_liverpool_url_unchanged(self):
+        from services.affiliate import get_affiliate_url
+        original = "https://www.liverpool.com.mx/producto?color=rojo&size=M"
+        assert get_affiliate_url(original, "liverpool") == original
 
-    def test_admitad_no_site_id_returns_original(self):
-        from services.affiliate import _admitad
-        from unittest.mock import patch
-
+    def test_coppel_url_unchanged(self):
+        from services.affiliate import get_affiliate_url
         original = "https://www.coppel.com/product"
-        with patch("services.affiliate.settings") as ms:
-            ms.ADMITAD_PUBLISHER_ID = "pub123"
-            ms.ADMITAD_SITE_IDS = {}   # no site ID for coppel
-            url = _admitad(original, "coppel")
+        assert get_affiliate_url(original, "coppel") == original
 
-        assert url == original
-
-    def test_admitad_encodes_product_url(self):
-        from services.affiliate import _admitad
-        from unittest.mock import patch
-
-        with patch("services.affiliate.settings") as ms:
-            ms.ADMITAD_PUBLISHER_ID = "pub"
-            ms.ADMITAD_SITE_IDS = {"liverpool": "liv123"}
-            url = _admitad(
-                "https://liverpool.com.mx/producto?color=rojo&size=M",
-                "liverpool",
-            )
-
-        # The product URL must be percent-encoded in the deep link
-        assert "%3A" in url or "liverpool.com.mx" in url  # either encoded or raw
+    def test_no_admitad_domain_in_result(self):
+        from services.affiliate import get_affiliate_url
+        result = get_affiliate_url("https://www.sams.com.mx/product", "sams_club")
+        assert "admitad" not in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Affiliate – Bitly shortener
+# Affiliate – Bitly shortener (removed)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestBitlyShortener:
-    """Tests for the Bitly URL-shortening integration."""
+    """
+    Bitly URL shortening has been removed with the affiliate APIs.
+    These tests verify that URLs are never shortened.
+    """
 
-    def test_no_token_returns_original(self):
-        from services.affiliate import shorten_url
-        from unittest.mock import patch
-
-        original = "https://www.amazon.com.mx/dp/B08N5WRWNW?tag=test"
-        with patch("services.affiliate.settings") as ms:
-            ms.BITLY_API_TOKEN = ""
-            ms.BITLY_GROUP_GUID = ""
-            result = shorten_url(original)
-
+    def test_amazon_url_not_shortened(self):
+        from services.affiliate import get_affiliate_url
+        original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+        result = get_affiliate_url(original, "amazon")
+        assert "bit.ly" not in result
         assert result == original
 
-    def test_successful_bitly_call(self):
-        from services.affiliate import shorten_url
-        from unittest.mock import patch, MagicMock
+    def test_walmart_url_not_shortened(self):
+        from services.affiliate import get_affiliate_url
+        original = "https://www.walmart.com.mx/product"
+        result = get_affiliate_url(original, "walmart")
+        assert "bit.ly" not in result
+        assert result == original
 
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"link": "https://bit.ly/abc123"}
-        mock_resp.raise_for_status.return_value = None
-
-        with patch("services.affiliate.settings") as ms, \
-             patch("services.affiliate._requests.post", return_value=mock_resp):
-            ms.BITLY_API_TOKEN = "faketoken"
-            ms.BITLY_GROUP_GUID = ""
-            result = shorten_url("https://www.walmart.com.mx/product")
-
-        assert result == "https://bit.ly/abc123"
-
-    def test_bitly_api_failure_returns_original(self):
-        from services.affiliate import shorten_url
-        from unittest.mock import patch
-
-        original = "https://www.coppel.com/product"
-        with patch("services.affiliate.settings") as ms, \
-             patch("services.affiliate._requests.post", side_effect=Exception("timeout")):
-            ms.BITLY_API_TOKEN = "tok"
-            ms.BITLY_GROUP_GUID = ""
-            result = shorten_url(original)
-
+    def test_mercadolibre_url_not_shortened(self):
+        from services.affiliate import get_affiliate_url
+        original = "https://articulo.mercadolibre.com.mx/MLM-123"
+        result = get_affiliate_url(original, "mercadolibre")
+        assert "bit.ly" not in result
         assert result == original
 
 

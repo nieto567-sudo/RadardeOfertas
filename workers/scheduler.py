@@ -106,26 +106,6 @@ app.conf.beat_schedule = {
         "task": "tasks.scrape_claro_shop",
         "schedule": SCHEDULE_DEFAULT_SECONDS,
     },
-    "scrape-aliexpress": {
-        "task": "tasks.scrape_aliexpress",
-        "schedule": SCHEDULE_DEFAULT_SECONDS,
-    },
-    "scrape-ebay": {
-        "task": "tasks.scrape_ebay",
-        "schedule": SCHEDULE_DEFAULT_SECONDS,
-    },
-    "scrape-newegg": {
-        "task": "tasks.scrape_newegg",
-        "schedule": SCHEDULE_DEFAULT_SECONDS,
-    },
-    "scrape-banggood": {
-        "task": "tasks.scrape_banggood",
-        "schedule": SCHEDULE_DEFAULT_SECONDS,
-    },
-    "scrape-gearbest": {
-        "task": "tasks.scrape_gearbest",
-        "schedule": SCHEDULE_DEFAULT_SECONDS,
-    },
     # ── Daily deal digest ──────────────────────────────────────────────────────
     "daily-digest": {
         "task": "tasks.publish_daily_digest",
