@@ -3141,3 +3141,211 @@ class TestPublicationGuard:
         mock_photo.assert_not_called()
         assert result.success is False
         assert result.error_message == "dry_run"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BaseScraper.get() – retry policy
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestBaseScraperRetryPolicy:
+    """Verify that BaseScraper.get() does not retry non-transient HTTP errors."""
+
+    def _make_scraper(self):
+        from scrapers.base import BaseScraper
+
+        class _DummyScraper(BaseScraper):
+            store_name = "test_store"
+
+            def scrape(self):
+                return []
+
+        scraper = _DummyScraper()
+        scraper.delay = 0  # skip polite delay in tests
+        return scraper
+
+    def _http_error(self, status_code: int):
+        """Build a requests.HTTPError with the given status code."""
+        import requests
+
+        resp = requests.Response()
+        resp.status_code = status_code
+        err = requests.HTTPError(response=resp)
+        err.response = resp  # ensure .response is always set explicitly
+        return err
+
+    def test_404_raises_immediately_without_retry(self):
+        """A 404 response must NOT be retried."""
+        import requests
+        from unittest.mock import patch
+
+        scraper = self._make_scraper()
+        call_count = 0
+
+        def _side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise self._http_error(404)
+
+        with patch.object(scraper.session, "get", side_effect=_side_effect):
+            with pytest.raises(requests.HTTPError):
+                scraper.get("https://example.com/not-found")
+
+        assert call_count == 1, "404 should not trigger any retry"
+
+    def test_403_raises_immediately_without_retry(self):
+        """A 403 response must NOT be retried."""
+        import requests
+        from unittest.mock import patch
+
+        scraper = self._make_scraper()
+        call_count = 0
+
+        def _side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise self._http_error(403)
+
+        with patch.object(scraper.session, "get", side_effect=_side_effect):
+            with pytest.raises(requests.HTTPError):
+                scraper.get("https://example.com/forbidden")
+
+        assert call_count == 1, "403 should not trigger any retry"
+
+    def test_503_is_retried(self):
+        """A 503 response IS a transient error and should be retried."""
+        import requests
+        from unittest.mock import patch, MagicMock
+
+        scraper = self._make_scraper()
+        call_count = 0
+
+        def _side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise self._http_error(503)
+
+        with patch("scrapers.base.time.sleep"):  # skip sleeps
+            with patch.object(scraper.session, "get", side_effect=_side_effect):
+                with pytest.raises(requests.HTTPError):
+                    scraper.get("https://example.com/unavailable")
+
+        assert call_count == 3, "503 should be retried up to _MAX_RETRIES times"
+
+    def test_successful_response_returned(self):
+        """A 200 response is returned immediately without retrying."""
+        import requests
+        from unittest.mock import patch, MagicMock
+
+        scraper = self._make_scraper()
+        mock_resp = MagicMock(spec=requests.Response)
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status.return_value = None
+
+        with patch.object(scraper.session, "get", return_value=mock_resp) as mock_get:
+            result = scraper.get("https://example.com/ok")
+
+        assert result is mock_resp
+        assert mock_get.call_count == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Search URL generation per store
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestStoreSearchUrls:
+    """Validate that each store generates the expected search URL for a query."""
+
+    def test_liverpool_search_url(self):
+        """Liverpool must use /tienda?s=<query>."""
+        from scrapers.liverpool import LiverpoolScraper
+        import requests
+        from urllib.parse import urlencode
+
+        scraper = LiverpoolScraper.__new__(LiverpoolScraper)
+        base = LiverpoolScraper.SEARCH_URL
+        params = {"s": "celulares"}
+        expected = base + "?" + urlencode(params)
+        # Build the same way the scraper does
+        req = requests.Request("GET", base, params=params).prepare()
+        assert req.url == expected
+        assert "tienda/busqueda" not in req.url, "Old broken path must not appear"
+        assert "s=celulares" in req.url
+
+    def test_costco_search_url(self):
+        """Costco must use /search?searchOption=mx-search-all&text=<query>."""
+        from scrapers.retailers_mx import CostcoScraper
+        import requests
+
+        scraper = CostcoScraper.__new__(CostcoScraper)
+        base = CostcoScraper.SEARCH_URL
+        params = {CostcoScraper._q_param: "celulares", **CostcoScraper._extra_params}
+        req = requests.Request("GET", base, params=params).prepare()
+        assert "text=celulares" in req.url
+        assert "searchOption=mx-search-all" in req.url
+
+    def test_amazon_search_url(self):
+        """Amazon must use /s?k=<query>."""
+        from scrapers.amazon import AmazonScraper
+        import requests
+
+        base = AmazonScraper.SEARCH_URL
+        params = {"k": "celulares", "i": "aps"}
+        req = requests.Request("GET", base, params=params).prepare()
+        assert "amazon.com.mx/s" in req.url
+        assert "k=celulares" in req.url
+
+    def test_walmart_search_url(self):
+        """Walmart must use /search?q=<query>."""
+        from scrapers.walmart import WalmartScraper
+        import requests
+
+        base = WalmartScraper.SEARCH_URL
+        params = {"q": "celulares"}
+        req = requests.Request("GET", base, params=params).prepare()
+        assert "walmart.com.mx/search" in req.url
+        assert "q=celulares" in req.url
+
+    def test_bodega_aurrera_search_url(self):
+        """Bodega Aurrerá must use /search?q=<query>."""
+        from scrapers.bodega_aurrera import BodegaAurreraScraper
+        import requests
+
+        base = BodegaAurreraScraper.SEARCH_URL
+        params = {"q": "celulares"}
+        req = requests.Request("GET", base, params=params).prepare()
+        assert "bodegaaurrera.com.mx/search" in req.url
+        assert "q=celulares" in req.url
+
+    def test_mercadolibre_api_url(self):
+        """MercadoLibre must query the public API endpoint."""
+        from scrapers.mercadolibre import API_SEARCH
+        import requests
+
+        params = {"q": "celulares", "limit": 50, "site_id": "MLM"}
+        req = requests.Request("GET", API_SEARCH, params=params).prepare()
+        assert "api.mercadolibre.com/sites/MLM/search" in req.url
+        assert "q=celulares" in req.url
+
+    def test_homedepot_search_url_path(self):
+        """HomeDepot must embed the query in the URL path (/s/<query>)."""
+        from scrapers.homedepot import HomeDepotScraper
+
+        url = HomeDepotScraper.build_search_url("refrigerador")
+        assert url == "https://www.homedepot.com.mx/s/refrigerador"
+
+    def test_homedepot_search_url_encodes_spaces(self):
+        """HomeDepot URL must percent-encode spaces in the query."""
+        from scrapers.homedepot import HomeDepotScraper
+
+        url = HomeDepotScraper.build_search_url("lavadora secadora")
+        assert "lavadora%20secadora" in url
+
+    def test_homedepot_registered_in_manager(self):
+        """HomeDepotScraper must be present in the global ALL_SCRAPERS list."""
+        from scrapers.manager import ALL_SCRAPERS
+        from scrapers.homedepot import HomeDepotScraper
+
+        stores = [cls.store_name for cls in ALL_SCRAPERS]
+        assert "homedepot" in stores

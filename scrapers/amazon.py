@@ -30,7 +30,17 @@ DEFAULT_SEARCH_TERMS = [
 
 
 class AmazonScraper(BaseScraper):
-    """Scraper for Amazon Mexico (amazon.com.mx)."""
+    """Scraper for Amazon Mexico (amazon.com.mx).
+
+    Search URL pattern: https://www.amazon.com.mx/s?k=<query>
+    Example: https://www.amazon.com.mx/s?k=celulares
+
+    Note: Amazon MX aggressively blocks datacenter IPs (Railway/cloud). If you
+    see persistent 503 errors, consider adding residential proxies
+    (HTTP_PROXY / HTTPS_PROXY env vars) or reducing request frequency.
+    For higher reliability and volume, use the Product Advertising API v5
+    (set AMAZON_ACCESS_KEY, AMAZON_SECRET_KEY, and AMAZON_PARTNER_TAG env vars).
+    """
 
     store_name = "amazon"
     BASE_URL = "https://www.amazon.com.mx"

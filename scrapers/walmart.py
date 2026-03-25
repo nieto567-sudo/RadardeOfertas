@@ -25,7 +25,17 @@ DEFAULT_QUERIES = [
 
 
 class WalmartScraper(BaseScraper):
-    """Scraper for Walmart Mexico."""
+    """Scraper for Walmart Mexico.
+
+    Uses text search as the primary approach:
+      https://www.walmart.com.mx/search?q=<query>
+
+    Note: the platform also exposes category browse URLs of the form:
+      https://www.walmart.com.mx/browse/<query>/destacados-<query>/
+      lo-mas-vendido-<query>/264800_310034_310035?...
+    These contain hard-coded department IDs and are therefore not suitable for
+    generic keyword searches; text search is used as the general fallback.
+    """
 
     store_name = "walmart"
     SEARCH_URL = "https://www.walmart.com.mx/search"

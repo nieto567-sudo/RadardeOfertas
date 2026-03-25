@@ -20,6 +20,7 @@ from scrapers.mercadolibre import MercadoLibreScraper
 from scrapers.walmart import WalmartScraper
 from scrapers.liverpool import LiverpoolScraper
 from scrapers.bodega_aurrera import BodegaAurreraScraper
+from scrapers.homedepot import HomeDepotScraper
 from scrapers.retailers_mx import (
     CostcoScraper,
     CoppelScraper,
@@ -53,6 +54,7 @@ ALL_SCRAPERS: list[Type[BaseScraper]] = [
     WalmartScraper,
     BodegaAurreraScraper,
     LiverpoolScraper,
+    HomeDepotScraper,
     CostcoScraper,
     CoppelScraper,
     ElektraScraper,

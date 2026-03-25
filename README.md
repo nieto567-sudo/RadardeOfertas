@@ -6,7 +6,7 @@ Sistema automatizado que detecta ofertas reales, errores de precio y oportunidad
 
 ## Características
 
-- 🕷️ **Scrapers para 20+ tiendas mexicanas**: Amazon MX, MercadoLibre, Walmart, Liverpool, Bodega Aurrerá, Costco, Coppel, Elektra, Sears, Sanborns, Sam's Club, Office Depot, OfficeMax, Soriana, Cyberpuerta, DDTech, PCEL, Intercompras, Gameplanet, Claro Shop.
+- 🕷️ **Scrapers para 21+ tiendas mexicanas**: Amazon MX, MercadoLibre, Walmart, Liverpool, Bodega Aurrerá, Costco, The Home Depot, Coppel, Elektra, Sears, Sanborns, Sam's Club, Office Depot, OfficeMax, Soriana, Cyberpuerta, DDTech, PCEL, Intercompras, Gameplanet, Claro Shop.
 - 📊 **Análisis histórico de precios** con PostgreSQL.
 - ⚡ **Detección de caída rápida de precio** (configurable).
 - 🎯 **Motor de scoring de ofertas** (0–100 pts).
@@ -33,6 +33,7 @@ RadardeOfertas/
 │   ├── walmart.py           # Walmart Mexico
 │   ├── liverpool.py         # Liverpool Mexico
 │   ├── bodega_aurrera.py    # Bodega Aurrerá
+│   ├── homedepot.py         # The Home Depot Mexico
 │   ├── retailers_mx.py      # Costco, Coppel, Elektra, Sears, Sanborns, Sam's, OD, OM, Soriana
 │   ├── tech_stores.py       # Cyberpuerta, DDTech, PCEL, Intercompras, Gameplanet, ClaroShop
 │   └── manager.py           # ScraperManager – orquesta todos los scrapers
@@ -428,7 +429,12 @@ Verifica PostgreSQL, Redis, Telegram API y estado de los circuit breakers. Retor
 
 #### Reintentos con backoff + jitter
 
-Todos los scrapers reintentan automáticamente las peticiones HTTP hasta 3 veces con backoff exponencial + jitter aleatorio.
+Los scrapers reintentan automáticamente hasta 3 veces con backoff exponencial + jitter aleatorio, **pero solo para errores transitorios** (429, 500, 502, 503, 504 y errores de red/timeout).
+
+Los errores HTTP permanentes del lado del cliente **no se reintentan**:
+- `400 Bad Request`, `401 Unauthorized`, `403 Forbidden`, `404 Not Found`
+
+Esto evita desperdiciar tiempo y peticiones cuando una URL está mal configurada (p. ej. endpoint incorrecto → 404).
 
 #### Circuit breaker por tienda
 
@@ -438,6 +444,26 @@ Si una tienda falla N veces consecutivas, su scraper se pausa automáticamente p
 |---|---|---|
 | `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | Fallos consecutivos antes de abrir el circuito | `5` |
 | `CIRCUIT_BREAKER_COOLDOWN_SECONDS` | Segundos de pausa antes del siguiente intento | `300` |
+
+---
+
+### URLs de búsqueda por tienda
+
+Cada scraper construye la URL de búsqueda a partir de un `query` (keyword). La tabla siguiente documenta el patrón de URL que usa cada tienda y el formato resultante para `query = "celulares"`:
+
+| Tienda | Patrón de URL | Ejemplo con "celulares" |
+|---|---|---|
+| **Liverpool** | `https://www.liverpool.com.mx/tienda?s=<query>` | `https://www.liverpool.com.mx/tienda?s=celulares` |
+| **Amazon MX** | `https://www.amazon.com.mx/s?k=<query>` | `https://www.amazon.com.mx/s?k=celulares` |
+| **Walmart** | `https://www.walmart.com.mx/search?q=<query>` | `https://www.walmart.com.mx/search?q=celulares` |
+| **Bodega Aurrerá** | `https://www.bodegaaurrera.com.mx/search?q=<query>` | `https://www.bodegaaurrera.com.mx/search?q=celulares` |
+| **Costco** | `https://www.costco.com.mx/search?searchOption=mx-search-all&text=<query>` | `https://www.costco.com.mx/search?searchOption=mx-search-all&text=celulares` |
+| **MercadoLibre** | API: `https://api.mercadolibre.com/sites/MLM/search?q=<query>` | `https://api.mercadolibre.com/sites/MLM/search?q=celulares` |
+| **The Home Depot** | `https://www.homedepot.com.mx/s/<query>` (query en el path) | `https://www.homedepot.com.mx/s/celulares` |
+
+> **Nota sobre Walmart y Bodega Aurrerá**: ambas plataformas también exponen URLs de navegación por departamento (`/browse/…`) que contienen IDs de categoría fijos. Esas URLs no son generalizables para búsquedas por keyword; los scrapers utilizan la búsqueda por texto como estrategia general.
+
+> **Nota sobre Amazon MX**: Amazon bloquea activamente IPs de datacenter (Railway/cloud) con 503. Si experimentas bloqueos, considera añadir proxies residenciales (`HTTP_PROXY` / `HTTPS_PROXY`) o reducir la frecuencia de peticiones.
 
 ---
 
