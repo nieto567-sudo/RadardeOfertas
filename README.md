@@ -110,24 +110,74 @@ celery -A workers.celery_app beat --loglevel=info
 
 ---
 
+## Arranque en producción (paso a paso)
+
+### ✅ Checklist previo: configurar el bot en Telegram
+
+Antes de arrancar, asegúrate de completar los siguientes pasos en Telegram:
+
+1. **Crea un bot** hablando con [@BotFather](https://t.me/BotFather) → `/newbot` → copia el token.
+2. **Crea un canal público** (Nuevo Canal → Público) y elige un `@username` (ej. `@mis_ofertas_mx`).
+3. **Agrega el bot como ADMIN del canal**:
+   - Abre el canal → Administradores → Agregar administrador → busca tu bot → confirma.
+   - Permisos mínimos requeridos: ✅ **Publicar mensajes** y ✅ **Publicar fotos** (o "Publicar contenido").
+4. **Obtén tu chat_id personal** hablando con [@userinfobot](https://t.me/userinfobot) → úsalo en `TELEGRAM_ADMIN_CHAT_ID` y `TELEGRAM_ADMIN_USER_IDS`.
+5. **Rellena `.env`** con el token, el `@username` del canal y tu chat_id.
+
+### Pasos de arranque
+
+```bash
+# 1. Construir imágenes e iniciar PostgreSQL y Redis
+docker-compose up --build -d db redis
+
+# 2. Inicializar el esquema de la base de datos
+docker-compose run --rm app python main.py init-db
+
+# 3. Verificar que todos los servicios están sanos
+docker-compose run --rm app python main.py healthcheck
+
+# 4. Ejecutar un ciclo de prueba (DRY_RUN=true en .env para no publicar aún)
+docker-compose run --rm app python main.py run-once
+
+# 5. Levantar el worker de Celery y el beat scheduler en producción
+docker-compose up -d worker beat
+```
+
+> 💡 **Tip**: activa `DRY_RUN=true` en `.env` para el paso 4 y revisa los logs antes de publicar en el canal real.  Una vez confirmado, cambia a `DRY_RUN=false` y reinicia con `docker-compose restart worker beat`.
+
+---
+
 ## Variables de entorno
 
 | Variable | Descripción | Valor por defecto |
 |---|---|---|
-| `DATABASE_URL` | URL de PostgreSQL | `postgresql://radar:radar@localhost:5432/radardeofertas` |
-| `REDIS_URL` | URL de Redis | `redis://localhost:6379/0` |
-| `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram | — |
-| `TELEGRAM_CHANNEL_ID` | ID o @username del canal | — |
-| `MONETIZED_LINKS_ENABLED` | Activar links de afiliado/UTM/Bitly | `false` |
-| `AMAZON_AFFILIATE_TAG` | Tag de Amazon Associates | — |
-| `MERCADOLIBRE_AFFILIATE_ID` | ID de afiliado de MercadoLibre | — |
-| `ALIEXPRESS_AFFILIATE_KEY` | Key de AliExpress Portals | — |
-| `EBAY_CAMPAIGN_ID` | Campaign ID de eBay Partner Network | — |
+| `DATABASE_URL` | URL de PostgreSQL (`db` = servicio docker-compose) | `postgresql://radar:radar@db:5432/radardeofertas` |
+| `REDIS_URL` | URL de Redis (`redis` = servicio docker-compose) | `redis://redis:6379/0` |
+| `TELEGRAM_BOT_TOKEN` | Token del bot ([@BotFather](https://t.me/BotFather)) | — |
+| `TELEGRAM_CHANNEL_ID` | `@username` del canal público | — |
+| `TELEGRAM_ADMIN_CHAT_ID` | Tu chat_id para alertas de admin | — |
+| `TELEGRAM_ADMIN_USER_IDS` | IDs con permisos de admin (separados por coma) | — |
+| `ALLOWED_CATEGORIES` | Categorías permitidas (separadas por coma) | 5 categorías por defecto |
+| `MAX_DAILY_PUBLICATIONS` | Máximo de publicaciones por día | `15` |
+| `MAX_PUBLICATIONS_PER_HOUR` | Máximo de publicaciones por hora | `15` |
+| `MIN_SECONDS_BETWEEN_PUBLICATIONS` | Segundos mínimos entre publicaciones | `5` |
+| `DRY_RUN` | Modo prueba (no publica en Telegram) | `false` |
+| `PUBLISHED_URLS_FILE` | Archivo JSON para deduplicación 24h | `published_urls.json` |
+| `MONETIZED_LINKS_ENABLED` | Activar links de afiliado/UTM | `false` |
 | `MIN_PUBLISH_SCORE` | Score mínimo para publicar (0–100) | `60` |
 | `RAPID_DROP_THRESHOLD` | Caída mínima para alertar (0–1) | `0.30` |
 | `RAPID_DROP_WINDOW_HOURS` | Ventana de tiempo para caída rápida | `2` |
+| `MIN_DISCOUNT_PCT` | Descuento mínimo requerido (%) | `20.0` |
+| `MIN_ABSOLUTE_SAVING_MXN` | Ahorro mínimo en MXN | `100.0` |
+| `PUBLICATION_COOLDOWN_HOURS` | Horas mínimas entre re-publicaciones del mismo producto | `6` |
+| `PRICE_ERROR_NOTIFY_ADMIN` | DM al admin antes de publicar errores de precio | `true` |
+| `LOG_FORMAT` | Formato de logs: `text` o `json` | `text` |
+| `LOG_LEVEL` | Nivel de logging | `INFO` |
+| `PROMETHEUS_PORT` | Puerto del servidor de métricas | `9090` |
+| `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | Fallos antes de abrir el circuit breaker | `5` |
+| `CIRCUIT_BREAKER_COOLDOWN_SECONDS` | Segundos de enfriamiento del circuit breaker | `300` |
 
----
+
 
 ## Lógica de detección de ofertas
 
@@ -204,7 +254,7 @@ pip install pytest
 pytest tests/ -v
 ```
 
-157 tests unitarios que cubren: limpieza de precios, clasificación de ofertas, scoring, generación de enlaces de afiliado, scraper manager, formateo de mensajes de Telegram, tendencia de precio, salud de scrapers, suscripciones, resumen diario, horas inteligentes de publicación, detector viral, detector de reventa, filtro de calidad, clasificador de productos, seguimiento de clics/compras y límite diario de publicaciones.
+262 tests unitarios que cubren: limpieza de precios, clasificación de ofertas, scoring, generación de enlaces, scraper manager, filtro de publicación (category whitelist, dedup, rate limiting, dry-run), formateo de mensajes de Telegram, tendencia de precio, salud de scrapers, suscripciones, resumen diario, horas inteligentes de publicación, detector viral, detector de reventa, filtro de calidad, clasificador de productos, seguimiento de clics/compras y límite diario de publicaciones.
 
 ---
 
