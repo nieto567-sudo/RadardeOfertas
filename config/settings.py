@@ -40,6 +40,14 @@ for _entry in _admin_ids_raw.split(","):
             _entry,
         )
 
+# ── Monetisation feature flag ─────────────────────────────────────────────────
+# Set to "true" to enable affiliate links, UTM parameters and Bitly shortening.
+# When "false" (default) the bot publishes only the plain canonical product URL
+# with no affiliate tags, no UTM tracking and no URL shortening.
+MONETIZED_LINKS_ENABLED: bool = (
+    os.getenv("MONETIZED_LINKS_ENABLED", "false").lower() == "true"
+)
+
 # ── Affiliate tags ────────────────────────────────────────────────────────────
 AMAZON_AFFILIATE_TAG: str = os.getenv("AMAZON_AFFILIATE_TAG", "")
 MERCADOLIBRE_AFFILIATE_ID: str = os.getenv("MERCADOLIBRE_AFFILIATE_ID", "")

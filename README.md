@@ -10,7 +10,7 @@ Sistema automatizado que detecta ofertas reales, errores de precio y oportunidad
 - 📊 **Análisis histórico de precios** con PostgreSQL.
 - ⚡ **Detección de caída rápida de precio** (configurable).
 - 🎯 **Motor de scoring de ofertas** (0–100 pts).
-- 🔗 **Generación automática de enlaces de afiliado** (Amazon, MercadoLibre, AliExpress, eBay).
+- 🔗 **Generación de enlaces de oferta** con modo directo (por defecto) o de afiliado (activable con `MONETIZED_LINKS_ENABLED=true`).
 - 📣 **Publicación automática en Telegram** con imagen, precio anterior/actual y enlace de afiliado.
 - ⚙️ **Workers Celery** con programación por tienda.
 - 🐳 **Docker Compose** para levantar todo con un solo comando.
@@ -41,6 +41,7 @@ RadardeOfertas/
 │   ├── price_analyzer.py    # Análisis de precios + detección de caída rápida
 │   ├── offer_scorer.py      # Scoring de ofertas (0–100)
 │   ├── affiliate.py         # Conversión de URLs a enlaces de afiliado
+│   ├── link_builder.py      # build_offer_link: modo directo vs. monetizado
 │   └── offer_processor.py   # Pipeline completo: analizar → puntuar → generar enlace
 ├── workers/
 │   ├── celery_app.py        # Instancia de Celery
@@ -118,6 +119,7 @@ celery -A workers.celery_app beat --loglevel=info
 | `REDIS_URL` | URL de Redis | `redis://localhost:6379/0` |
 | `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram | — |
 | `TELEGRAM_CHANNEL_ID` | ID o @username del canal | — |
+| `MONETIZED_LINKS_ENABLED` | Activar links de afiliado/UTM/Bitly | `false` |
 | `AMAZON_AFFILIATE_TAG` | Tag de Amazon Associates | — |
 | `MERCADOLIBRE_AFFILIATE_ID` | ID de afiliado de MercadoLibre | — |
 | `ALIEXPRESS_AFFILIATE_KEY` | Key de AliExpress Portals | — |
@@ -171,6 +173,39 @@ celery -A workers.celery_app beat --loglevel=info
 | Amazon, MercadoLibre | Cada 5 min |
 | Walmart, Liverpool, Bodega Aurrerá | Cada 10 min |
 | Resto de tiendas | Cada 15 min |
+
+---
+
+## Modo de links: directo vs. monetizado
+
+### Links directos (por defecto)
+
+Por defecto el bot publica el link canónico de la oferta **sin ningún tipo de modificación**: sin tags de afiliado, sin parámetros UTM y sin acortamiento de URLs. Esto no requiere configurar ninguna API de monetización.
+
+```env
+MONETIZED_LINKS_ENABLED=false   # valor por defecto; no es necesario incluirlo
+```
+
+### Activar monetización en el futuro
+
+Cuando quieras empezar a generar comisiones, basta con cambiar **una variable** en tu `.env` y configurar los tokens de los programas de afiliado que uses:
+
+```env
+MONETIZED_LINKS_ENABLED=true
+
+# Amazon Associates
+AMAZON_AFFILIATE_TAG=tuetiqueta-20
+
+# Bitly (acortador + contador de clics)
+BITLY_API_TOKEN=tu_token_bitly
+```
+
+No es necesario modificar ningún archivo de código; el flag `MONETIZED_LINKS_ENABLED` activa automáticamente:
+
+- Tags de afiliado por tienda (Amazon, MercadoLibre, AliExpress, eBay, Admitad).
+- Parámetros UTM en todos los links (`utm_source`, `utm_medium`, `utm_campaign`).
+- Acortamiento con Bitly y registro de clics.
+- Registro de comisiones estimadas en base de datos.
 
 ---
 

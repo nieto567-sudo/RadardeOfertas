@@ -219,6 +219,102 @@ class TestAffiliateLinks:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# link_builder – build_offer_link feature flag
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestLinkBuilder:
+    """Tests for the MONETIZED_LINKS_ENABLED feature flag in link_builder."""
+
+    _AMAZON_URL = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+    _WALMART_URL = "https://www.walmart.com.mx/producto/1234"
+    _UNKNOWN_URL = "https://unknown-store.com/product/1"
+
+    # ── Direct mode (MONETIZED_LINKS_ENABLED=false, the default) ─────────────
+
+    def test_build_direct_link_returns_url_unchanged(self):
+        from services.link_builder import build_direct_link
+        url = self._AMAZON_URL
+        assert build_direct_link(url) == url
+
+    def test_build_offer_link_direct_mode_no_affiliate_tag(self):
+        """With monetisation disabled, no affiliate tag is added."""
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", False):
+            result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
+        assert result == self._AMAZON_URL
+        assert "tag=" not in result
+
+    def test_build_offer_link_direct_mode_no_utm(self):
+        """With monetisation disabled, no UTM parameters are added."""
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", False):
+            result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
+        assert "utm_source" not in result
+        assert "utm_medium" not in result
+        assert "utm_campaign" not in result
+
+    def test_build_offer_link_direct_mode_no_bitly(self):
+        """With monetisation disabled, the URL is never shortened."""
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", False):
+            result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
+        assert "bit.ly" not in result
+
+    def test_build_offer_link_direct_mode_returns_exact_input(self):
+        """Direct mode must return exactly the input URL for unknown stores too."""
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", False):
+            result = link_builder.build_offer_link(self._UNKNOWN_URL, "unknown_store")
+        assert result == self._UNKNOWN_URL
+
+    def test_build_offer_link_direct_mode_walmart_no_admitad(self):
+        """Admitad deep-link must NOT be applied when monetisation is disabled."""
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", False):
+            result = link_builder.build_offer_link(self._WALMART_URL, "walmart")
+        assert result == self._WALMART_URL
+        assert "admitad" not in result
+
+    # ── Monetised mode (MONETIZED_LINKS_ENABLED=true) ────────────────────────
+
+    def test_build_offer_link_monetised_mode_adds_affiliate_tag(self):
+        """With monetisation enabled, the Amazon affiliate tag is applied."""
+        from services import link_builder, affiliate
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", True), \
+             patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", "testtag-20"), \
+             patch.object(affiliate.settings, "BITLY_API_TOKEN", ""):
+            result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
+        assert "tag=testtag-20" in result
+
+    def test_build_offer_link_monetised_mode_adds_utm(self):
+        """With monetisation enabled, UTM parameters are added."""
+        from services import link_builder, affiliate
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", True), \
+             patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", ""), \
+             patch.object(affiliate.settings, "BITLY_API_TOKEN", ""), \
+             patch.object(affiliate.settings, "UTM_SOURCE", "radardeofertas"), \
+             patch.object(affiliate.settings, "UTM_MEDIUM", "telegram"), \
+             patch.object(affiliate.settings, "UTM_CAMPAIGN", "oferta"):
+            result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
+        assert "utm_source=radardeofertas" in result
+
+    # ── build_direct_link / build_monetized_link unit-level ──────────────────
+
+    def test_build_monetized_link_delegates_to_get_affiliate_url(self):
+        """build_monetized_link must produce the same result as get_affiliate_url."""
+        from services import link_builder, affiliate
+        with patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", "my-tag-20"), \
+             patch.object(affiliate.settings, "BITLY_API_TOKEN", ""), \
+             patch.object(affiliate.settings, "UTM_SOURCE", "s"), \
+             patch.object(affiliate.settings, "UTM_MEDIUM", "m"), \
+             patch.object(affiliate.settings, "UTM_CAMPAIGN", "c"):
+            expected = affiliate.get_affiliate_url(self._AMAZON_URL, "amazon")
+            result = link_builder.build_monetized_link(self._AMAZON_URL, "amazon")
+        assert result == expected
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PriceAnalyzer._classify
 # ─────────────────────────────────────────────────────────────────────────────
 
