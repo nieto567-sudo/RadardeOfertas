@@ -149,68 +149,119 @@ docker-compose up -d worker beat
 
 ## Despliegue en Railway ☁️
 
-Railway es el entorno de producción recomendado para RadardeOfertas: provisiona PostgreSQL y Redis automáticamente, y el repo ya incluye `railway.toml` y `Procfile` listos.
+RadardeOfertas corre en Railway como un **único servicio** (sin Redis ni Celery).  
+El repo incluye `railway.toml` listo para usar: inicializa la DB y arranca el loop de publicación automáticamente.
 
-### Prerequisitos
+### Variables de entorno requeridas
 
-- Cuenta en [Railway](https://railway.app) y Railway CLI instalado (`npm i -g @railway/cli` o descarga el binario).
-- Bot de Telegram configurado (ver checklist anterior).
+Configúralas en Railway → Service → Variables **antes** del primer deploy.  
+El servicio arrancará con error si alguna de las dos primeras falta.
+
+| Variable | Descripción | Obligatoria |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Token del bot ([@BotFather](https://t.me/BotFather)) | ✅ |
+| `TELEGRAM_CHANNEL_ID` | `@username` del canal público o ID numérico (`-100…`) | ✅ |
+| `DATABASE_URL` | Railway lo inyecta automáticamente desde el plugin PostgreSQL | ✅ (auto) |
+| `TELEGRAM_ADMIN_CHAT_ID` | Tu chat_id para alertas de admin | Opcional |
+| `TELEGRAM_ADMIN_USER_IDS` | IDs de admins separados por coma | Opcional |
+| `MAX_DAILY_PUBLICATIONS` | Máximo de publicaciones por día (defecto: `15`) | Opcional |
+| `DRY_RUN` | `true` para modo prueba (no publica en Telegram) | Opcional |
+| `LOG_FORMAT` | `json` para logs estructurados (recomendado en Railway) | Opcional |
+
+> `DATABASE_URL` es inyectada automáticamente por el plugin PostgreSQL; **no** la añadas manualmente.  
+> `REDIS_URL` **no es necesaria** en el modo loop (sin Celery).
 
 ### Paso a paso
 
+**1. Crea el proyecto en Railway**
+
 ```bash
-# 1. Autentícate y crea el proyecto
 railway login
 railway init          # en la raíz del repo clonado
 ```
 
-En el dashboard de Railway:
+**2. Añade PostgreSQL**
 
-**2. Añade los plugins de infraestructura**
-- **New Service → Database → PostgreSQL** — Railway inyecta `DATABASE_URL` automáticamente.
-- **New Service → Database → Redis** — Railway inyecta `REDIS_URL` automáticamente.
+En el dashboard: **New Service → Database → PostgreSQL**.  
+Railway inyecta `DATABASE_URL` automáticamente al servicio principal.
 
-**3. Crea el servicio Worker (proceso principal)**
-- New Service → GitHub Repo → selecciona `RadardeOfertas`.
-- El `railway.toml` ya configura el build (Dockerfile) y el start command (`init-db` + worker).
-- En la pestaña **Variables**, añade:
+**3. Conecta el repositorio**
 
-| Variable | Valor |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | `TU_TOKEN_AQUI` |
-| `TELEGRAM_CHANNEL_ID` | `@MI_CANAL_PUBLICO` |
-| `TELEGRAM_ADMIN_CHAT_ID` | `TU_CHAT_ID_AQUI` |
-| `TELEGRAM_ADMIN_USER_IDS` | `TU_CHAT_ID_AQUI` |
-| `MAX_DAILY_PUBLICATIONS` | `10` |
-| `ALLOWED_CATEGORIES` | `Celulares y Smartphones,Gaming y Videojuegos,Televisores y Audio,Electrodomésticos,Ropa y Accesorios` |
-| `DRY_RUN` | `false` (usa `true` para pruebas) |
-| `LOG_FORMAT` | `json` |
+- **New Service → GitHub Repo → `RadardeOfertas`**.
+- El `railway.toml` ya configura el build (Dockerfile) y el start command.
+- En **Variables**, añade `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID` y las opcionales que desees.
 
-> Las variables `DATABASE_URL` y `REDIS_URL` son inyectadas automáticamente por los plugins; **no** las añadas manualmente.
-
-**4. Crea el servicio Beat (scheduler)**
-- New Service → GitHub Repo → mismo repo, misma rama.
-- En **Settings → Deploy → Start Command** sobrescribe con:
-  ```
-  celery -A workers.celery_app beat --loglevel=info
-  ```
-- Copia las mismas variables de entorno que el worker (sin `MAX_DAILY_PUBLICATIONS` si quieres valor por defecto).
-
-**5. Despliega**
+**4. Despliega**
 
 ```bash
-# Desde la CLI (o haz click en "Deploy" en el dashboard)
 railway up
+# o haz click en "Deploy" en el dashboard
 ```
 
-Railway construirá la imagen Docker, iniciará `init-db` y levantará el worker y el beat automáticamente.
+Railway construirá la imagen Docker y ejecutará:
+
+```
+python -u main.py init-db
+python -u main.py run-loop --interval 300
+```
+
+### Logs esperados (servicio sano)
+
+Al arrancar correctamente verás algo así:
+
+```
+INFO  __main__  Initialising database…
+INFO  __main__  Database initialised.
+INFO  __main__  run-loop starting – interval=300s, backoff_on_error=60s
+INFO  __main__  run-loop heartbeat – iteration 1
+INFO  __main__  Starting scrape cycle…
+INFO  __main__  Scraped 42 products
+INFO  __main__  Cycle complete. Offers published: 3
+INFO  __main__  Sleeping 300 seconds until next cycle…
+INFO  __main__  run-loop heartbeat – iteration 2
+…
+```
+
+Si ves `run-loop heartbeat` el servicio está en funcionamiento. Si ves `Stopping Container` inmediatamente después de `Database initialised.`, consulta la sección de Troubleshooting.
 
 ### Notas importantes para Railway
 
 - **`DATABASE_URL`**: Railway inyecta el formato `postgres://...`. El código lo normaliza automáticamente a `postgresql://` (requerido por SQLAlchemy).
-- **Filesystem efímero**: `published_urls.json` se guarda en `/tmp` por defecto. El historial de 24h se reinicia si el contenedor se recicla, lo que puede provocar duplicados momentáneos. Esto es aceptable para el caso de uso.
-- **Celerybeat schedule**: el archivo `celerybeat-schedule` se genera en `/app` y se pierde al reiniciar. Celery beat lo regenera automáticamente; no hay pérdida funcional.
-- **Volúmenes (opcional)**: Railway soporta volúmenes persistentes. Si quieres deduplicación 100% persistente, monta un volumen en `/data` y configura `PUBLISHED_URLS_FILE=/data/published_urls.json`.
+- **Sin Redis**: el modo `run-loop` no requiere Redis. El `Procfile` y el `docker-compose.yml` incluyen entradas de Celery para uso local avanzado, pero Railway usa exclusivamente el `startCommand` de `railway.toml`.
+- **Filesystem efímero**: `published_urls.json` se guarda en `/tmp` por defecto. El historial de 24 h se reinicia si el contenedor se recicla, lo que puede provocar duplicados momentáneos. Usa `PUBLISHED_URLS_FILE=/data/published_urls.json` con un volumen persistente para evitarlo.
+- **Señales**: el loop responde a SIGTERM (Railway stop/redeploy) finalizando el ciclo actual antes de salir.
+
+---
+
+## Troubleshooting (Railway)
+
+### El contenedor se detiene inmediatamente sin logs de `run-loop`
+
+**Causa más común**: `TELEGRAM_BOT_TOKEN` o `TELEGRAM_CHANNEL_ID` no están configuradas.
+
+El servicio imprimirá:
+
+```
+CRITICAL __main__  run-loop cannot start: required environment variable(s) not set: TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID.
+          Set them in Railway → Service → Variables and redeploy.
+```
+
+**Solución**: añade las variables en Railway → Service → Variables → redeploy.
+
+### El contenedor arranca pero no publica ofertas
+
+1. Verifica que `DRY_RUN` **no** esté en `true`.
+2. Revisa los logs en busca de errores de Telegram: `401 Unauthorized` (token incorrecto) o `403 Forbidden` (el bot no es admin del canal).
+3. Asegúrate de que el bot tiene permisos de **Publicar mensajes** en el canal.
+4. Confirma el formato de `TELEGRAM_CHANNEL_ID`: puede ser `@mi_canal` (canales públicos) o el ID numérico `-100XXXXXXXXXX` (canales privados).
+
+### El contenedor muestra `Traceback` y se reinicia
+
+El loop captura excepciones de ciclo individuales y reintenta automáticamente tras 60 segundos. Un traceback en los logs es informativo y **no detiene el servicio**. Solo un fallo en `init-db` o una variable faltante provocan una salida con código de error.
+
+### Verificar que el loop está activo
+
+Busca en los logs la línea `run-loop heartbeat – iteration N`. Si el número `N` sube con el tiempo (cada ~5 min), el servicio está corriendo correctamente.
 
 ---
 

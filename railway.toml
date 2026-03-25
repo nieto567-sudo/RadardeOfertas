@@ -14,6 +14,6 @@ dockerfilePath = "Dockerfile"
 # Initialise the DB schema then start the offer-publishing loop.
 # `init-db` is idempotent (CREATE TABLE IF NOT EXISTS), safe to run on every start.
 # `run-loop --interval 300` scrapes offers and posts them to Telegram every 300 s.
-startCommand = "python main.py init-db && python main.py run-loop --interval 300"
+startCommand = "sh -lc 'set -e; python -u main.py init-db; python -u main.py run-loop --interval 300'"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
