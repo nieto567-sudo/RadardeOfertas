@@ -39,13 +39,6 @@ from scrapers.tech_stores import (
     GameplanetScraper,
     ClaroShopScraper,
 )
-from scrapers.international import (
-    AliExpressScraper,
-    eBayScraper,
-    NeweggScraper,
-    BanggoodScraper,
-    GearbestScraper,
-)
 from services.circuit_breaker import CircuitBreaker
 from services.metrics import SCRAPE_PRODUCTS, SCRAPE_ERRORS, SCRAPE_DURATION
 
@@ -56,8 +49,6 @@ ALL_SCRAPERS: list[Type[BaseScraper]] = [
     # Marketplaces
     AmazonScraper,
     MercadoLibreScraper,
-    AliExpressScraper,
-    eBayScraper,
     # Mexican retailers
     WalmartScraper,
     BodegaAurreraScraper,
@@ -78,10 +69,6 @@ ALL_SCRAPERS: list[Type[BaseScraper]] = [
     IntercomprasScraper,
     GameplanetScraper,
     ClaroShopScraper,
-    # International
-    NeweggScraper,
-    BanggoodScraper,
-    GearbestScraper,
 ]
 
 

@@ -6,11 +6,11 @@ Sistema automatizado que detecta ofertas reales, errores de precio y oportunidad
 
 ## Características
 
-- 🕷️ **Scrapers para 25+ tiendas**: Amazon MX, MercadoLibre, Walmart, Liverpool, Bodega Aurrerá, Costco, Coppel, Elektra, Sears, Sanborns, Sam's Club, Office Depot, OfficeMax, Soriana, Cyberpuerta, DDTech, PCEL, Intercompras, Gameplanet, Claro Shop, AliExpress, eBay, Newegg, Banggood, Gearbest.
+- 🕷️ **Scrapers para 20+ tiendas mexicanas**: Amazon MX, MercadoLibre, Walmart, Liverpool, Bodega Aurrerá, Costco, Coppel, Elektra, Sears, Sanborns, Sam's Club, Office Depot, OfficeMax, Soriana, Cyberpuerta, DDTech, PCEL, Intercompras, Gameplanet, Claro Shop.
 - 📊 **Análisis histórico de precios** con PostgreSQL.
 - ⚡ **Detección de caída rápida de precio** (configurable).
 - 🎯 **Motor de scoring de ofertas** (0–100 pts).
-- 🔗 **Generación automática de enlaces de afiliado** (Amazon, MercadoLibre, AliExpress, eBay).
+- 🔗 **Generación de enlaces de oferta** con modo directo (por defecto) o de afiliado (activable con `MONETIZED_LINKS_ENABLED=true`).
 - 📣 **Publicación automática en Telegram** con imagen, precio anterior/actual y enlace de afiliado.
 - ⚙️ **Workers Celery** con programación por tienda.
 - 🐳 **Docker Compose** para levantar todo con un solo comando.
@@ -35,12 +35,12 @@ RadardeOfertas/
 │   ├── bodega_aurrera.py    # Bodega Aurrerá
 │   ├── retailers_mx.py      # Costco, Coppel, Elektra, Sears, Sanborns, Sam's, OD, OM, Soriana
 │   ├── tech_stores.py       # Cyberpuerta, DDTech, PCEL, Intercompras, Gameplanet, ClaroShop
-│   ├── international.py     # AliExpress, eBay, Newegg, Banggood, Gearbest
 │   └── manager.py           # ScraperManager – orquesta todos los scrapers
 ├── services/
 │   ├── price_analyzer.py    # Análisis de precios + detección de caída rápida
 │   ├── offer_scorer.py      # Scoring de ofertas (0–100)
 │   ├── affiliate.py         # Conversión de URLs a enlaces de afiliado
+│   ├── link_builder.py      # build_offer_link: modo directo vs. monetizado
 │   └── offer_processor.py   # Pipeline completo: analizar → puntuar → generar enlace
 ├── workers/
 │   ├── celery_app.py        # Instancia de Celery
@@ -110,23 +110,141 @@ celery -A workers.celery_app beat --loglevel=info
 
 ---
 
+## Arranque en producción (paso a paso)
+
+### ✅ Checklist previo: configurar el bot en Telegram
+
+Antes de arrancar, asegúrate de completar los siguientes pasos en Telegram:
+
+1. **Crea un bot** hablando con [@BotFather](https://t.me/BotFather) → `/newbot` → copia el token.
+2. **Crea un canal público** (Nuevo Canal → Público) y elige un `@username` (ej. `@mis_ofertas_mx`).
+3. **Agrega el bot como ADMIN del canal**:
+   - Abre el canal → Administradores → Agregar administrador → busca tu bot → confirma.
+   - Permisos mínimos requeridos: ✅ **Publicar mensajes** y ✅ **Publicar fotos** (o "Publicar contenido").
+4. **Obtén tu chat_id personal** hablando con [@userinfobot](https://t.me/userinfobot) → úsalo en `TELEGRAM_ADMIN_CHAT_ID` y `TELEGRAM_ADMIN_USER_IDS`.
+5. **Rellena `.env`** con el token, el `@username` del canal y tu chat_id.
+
+### Pasos de arranque
+
+```bash
+# 1. Construir imágenes e iniciar PostgreSQL y Redis
+docker-compose up --build -d db redis
+
+# 2. Inicializar el esquema de la base de datos
+docker-compose run --rm app python main.py init-db
+
+# 3. Verificar que todos los servicios están sanos
+docker-compose run --rm app python main.py healthcheck
+
+# 4. Ejecutar un ciclo de prueba (DRY_RUN=true en .env para no publicar aún)
+docker-compose run --rm app python main.py run-once
+
+# 5. Levantar el worker de Celery y el beat scheduler en producción
+docker-compose up -d worker beat
+```
+
+> 💡 **Tip**: activa `DRY_RUN=true` en `.env` para el paso 4 y revisa los logs antes de publicar en el canal real.  Una vez confirmado, cambia a `DRY_RUN=false` y reinicia con `docker-compose restart worker beat`.
+
+---
+
+## Despliegue en Railway ☁️
+
+Railway es el entorno de producción recomendado para RadardeOfertas: provisiona PostgreSQL y Redis automáticamente, y el repo ya incluye `railway.toml` y `Procfile` listos.
+
+### Prerequisitos
+
+- Cuenta en [Railway](https://railway.app) y Railway CLI instalado (`npm i -g @railway/cli` o descarga el binario).
+- Bot de Telegram configurado (ver checklist anterior).
+
+### Paso a paso
+
+```bash
+# 1. Autentícate y crea el proyecto
+railway login
+railway init          # en la raíz del repo clonado
+```
+
+En el dashboard de Railway:
+
+**2. Añade los plugins de infraestructura**
+- **New Service → Database → PostgreSQL** — Railway inyecta `DATABASE_URL` automáticamente.
+- **New Service → Database → Redis** — Railway inyecta `REDIS_URL` automáticamente.
+
+**3. Crea el servicio Worker (proceso principal)**
+- New Service → GitHub Repo → selecciona `RadardeOfertas`.
+- El `railway.toml` ya configura el build (Dockerfile) y el start command (`init-db` + worker).
+- En la pestaña **Variables**, añade:
+
+| Variable | Valor |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | `TU_TOKEN_AQUI` |
+| `TELEGRAM_CHANNEL_ID` | `@MI_CANAL_PUBLICO` |
+| `TELEGRAM_ADMIN_CHAT_ID` | `TU_CHAT_ID_AQUI` |
+| `TELEGRAM_ADMIN_USER_IDS` | `TU_CHAT_ID_AQUI` |
+| `MAX_DAILY_PUBLICATIONS` | `10` |
+| `ALLOWED_CATEGORIES` | `Celulares y Smartphones,Gaming y Videojuegos,Televisores y Audio,Electrodomésticos,Ropa y Accesorios` |
+| `DRY_RUN` | `false` (usa `true` para pruebas) |
+| `LOG_FORMAT` | `json` |
+
+> Las variables `DATABASE_URL` y `REDIS_URL` son inyectadas automáticamente por los plugins; **no** las añadas manualmente.
+
+**4. Crea el servicio Beat (scheduler)**
+- New Service → GitHub Repo → mismo repo, misma rama.
+- En **Settings → Deploy → Start Command** sobrescribe con:
+  ```
+  celery -A workers.celery_app beat --loglevel=info
+  ```
+- Copia las mismas variables de entorno que el worker (sin `MAX_DAILY_PUBLICATIONS` si quieres valor por defecto).
+
+**5. Despliega**
+
+```bash
+# Desde la CLI (o haz click en "Deploy" en el dashboard)
+railway up
+```
+
+Railway construirá la imagen Docker, iniciará `init-db` y levantará el worker y el beat automáticamente.
+
+### Notas importantes para Railway
+
+- **`DATABASE_URL`**: Railway inyecta el formato `postgres://...`. El código lo normaliza automáticamente a `postgresql://` (requerido por SQLAlchemy).
+- **Filesystem efímero**: `published_urls.json` se guarda en `/tmp` por defecto. El historial de 24h se reinicia si el contenedor se recicla, lo que puede provocar duplicados momentáneos. Esto es aceptable para el caso de uso.
+- **Celerybeat schedule**: el archivo `celerybeat-schedule` se genera en `/app` y se pierde al reiniciar. Celery beat lo regenera automáticamente; no hay pérdida funcional.
+- **Volúmenes (opcional)**: Railway soporta volúmenes persistentes. Si quieres deduplicación 100% persistente, monta un volumen en `/data` y configura `PUBLISHED_URLS_FILE=/data/published_urls.json`.
+
+---
+
 ## Variables de entorno
 
 | Variable | Descripción | Valor por defecto |
 |---|---|---|
-| `DATABASE_URL` | URL de PostgreSQL | `postgresql://radar:radar@localhost:5432/radardeofertas` |
-| `REDIS_URL` | URL de Redis | `redis://localhost:6379/0` |
-| `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram | — |
-| `TELEGRAM_CHANNEL_ID` | ID o @username del canal | — |
-| `AMAZON_AFFILIATE_TAG` | Tag de Amazon Associates | — |
-| `MERCADOLIBRE_AFFILIATE_ID` | ID de afiliado de MercadoLibre | — |
-| `ALIEXPRESS_AFFILIATE_KEY` | Key de AliExpress Portals | — |
-| `EBAY_CAMPAIGN_ID` | Campaign ID de eBay Partner Network | — |
+| `DATABASE_URL` | URL de PostgreSQL — Railway lo inyecta automáticamente | `postgresql://radar:radar@localhost:5432/radardeofertas` |
+| `REDIS_URL` | URL de Redis — Railway lo inyecta automáticamente | `redis://localhost:6379/0` |
+| `TELEGRAM_BOT_TOKEN` | Token del bot ([@BotFather](https://t.me/BotFather)) | — |
+| `TELEGRAM_CHANNEL_ID` | `@username` del canal público | — |
+| `TELEGRAM_ADMIN_CHAT_ID` | Tu chat_id para alertas de admin | — |
+| `TELEGRAM_ADMIN_USER_IDS` | IDs con permisos de admin (separados por coma) | — |
+| `ALLOWED_CATEGORIES` | Categorías permitidas (separadas por coma) | 5 categorías por defecto |
+| `MAX_DAILY_PUBLICATIONS` | Máximo de publicaciones por día | `15` |
+| `MAX_PUBLICATIONS_PER_HOUR` | Máximo de publicaciones por hora | `15` |
+| `MIN_SECONDS_BETWEEN_PUBLICATIONS` | Segundos mínimos entre publicaciones | `5` |
+| `DRY_RUN` | Modo prueba (no publica en Telegram) | `false` |
+| `PUBLISHED_URLS_FILE` | Archivo JSON para deduplicación 24h | `/tmp/published_urls.json` |
+| `MONETIZED_LINKS_ENABLED` | Activar links de afiliado/UTM | `false` |
 | `MIN_PUBLISH_SCORE` | Score mínimo para publicar (0–100) | `60` |
 | `RAPID_DROP_THRESHOLD` | Caída mínima para alertar (0–1) | `0.30` |
 | `RAPID_DROP_WINDOW_HOURS` | Ventana de tiempo para caída rápida | `2` |
+| `MIN_DISCOUNT_PCT` | Descuento mínimo requerido (%) | `20.0` |
+| `MIN_ABSOLUTE_SAVING_MXN` | Ahorro mínimo en MXN | `100.0` |
+| `PUBLICATION_COOLDOWN_HOURS` | Horas mínimas entre re-publicaciones del mismo producto | `6` |
+| `PRICE_ERROR_NOTIFY_ADMIN` | DM al admin antes de publicar errores de precio | `true` |
+| `LOG_FORMAT` | Formato de logs: `text` o `json` | `text` |
+| `LOG_LEVEL` | Nivel de logging | `INFO` |
+| `PROMETHEUS_PORT` | Puerto del servidor de métricas | `9090` |
+| `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | Fallos antes de abrir el circuit breaker | `5` |
+| `CIRCUIT_BREAKER_COOLDOWN_SECONDS` | Segundos de enfriamiento del circuit breaker | `300` |
 
----
+
 
 ## Lógica de detección de ofertas
 
@@ -170,7 +288,29 @@ celery -A workers.celery_app beat --loglevel=info
 |---|---|
 | Amazon, MercadoLibre | Cada 5 min |
 | Walmart, Liverpool, Bodega Aurrerá | Cada 10 min |
-| Resto de tiendas | Cada 15 min |
+| Resto de tiendas mexicanas | Cada 15 min |
+
+---
+
+## Modo de links: directo vs. monetizado
+
+### Links directos (por defecto)
+
+Por defecto el bot publica el link canónico de la oferta **sin ningún tipo de modificación**: sin tags de afiliado, sin parámetros UTM y sin acortamiento de URLs. Esto no requiere configurar ninguna API de monetización.
+
+```env
+MONETIZED_LINKS_ENABLED=false   # valor por defecto; no es necesario incluirlo
+```
+
+### Activar monetización en el futuro
+
+Cuando quieras empezar a generar comisiones, basta con cambiar **una variable** en tu `.env` y añadir la lógica del programa de afiliado en `services/affiliate.py`:
+
+```env
+MONETIZED_LINKS_ENABLED=true
+```
+
+El flag `MONETIZED_LINKS_ENABLED=true` activa automáticamente la ruta `build_monetized_link` en `services/link_builder.py`.  Implementa el programa de afiliado que quieras usar en `services/affiliate.py` y el bot comenzará a usarlo sin más cambios de código.
 
 ---
 
@@ -181,7 +321,7 @@ pip install pytest
 pytest tests/ -v
 ```
 
-157 tests unitarios que cubren: limpieza de precios, clasificación de ofertas, scoring, generación de enlaces de afiliado, scraper manager, formateo de mensajes de Telegram, tendencia de precio, salud de scrapers, suscripciones, resumen diario, horas inteligentes de publicación, detector viral, detector de reventa, filtro de calidad, clasificador de productos, seguimiento de clics/compras y límite diario de publicaciones.
+262 tests unitarios que cubren: limpieza de precios, clasificación de ofertas, scoring, generación de enlaces, scraper manager, filtro de publicación (category whitelist, dedup, rate limiting, dry-run), formateo de mensajes de Telegram, tendencia de precio, salud de scrapers, suscripciones, resumen diario, horas inteligentes de publicación, detector viral, detector de reventa, filtro de calidad, clasificador de productos, seguimiento de clics/compras y límite diario de publicaciones.
 
 ---
 

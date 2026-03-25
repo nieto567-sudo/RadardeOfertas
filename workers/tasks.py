@@ -216,31 +216,6 @@ def scrape_claro_shop(self):
     return _process_store("claro_shop")
 
 
-@app.task(name="tasks.scrape_aliexpress", bind=True, max_retries=3)
-def scrape_aliexpress(self):
-    return _process_store("aliexpress")
-
-
-@app.task(name="tasks.scrape_ebay", bind=True, max_retries=3)
-def scrape_ebay(self):
-    return _process_store("ebay")
-
-
-@app.task(name="tasks.scrape_newegg", bind=True, max_retries=3)
-def scrape_newegg(self):
-    return _process_store("newegg")
-
-
-@app.task(name="tasks.scrape_banggood", bind=True, max_retries=3)
-def scrape_banggood(self):
-    return _process_store("banggood")
-
-
-@app.task(name="tasks.scrape_gearbest", bind=True, max_retries=3)
-def scrape_gearbest(self):
-    return _process_store("gearbest")
-
-
 # ── Daily digest ──────────────────────────────────────────────────────────────
 
 

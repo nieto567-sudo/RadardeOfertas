@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from config import settings
 from database.models import Offer, OfferStatus, Publication
 from scrapers.base import ProductData
-from services.affiliate import get_affiliate_url, shorten_url
+from services.link_builder import build_offer_link
 from services.cooldown import is_on_cooldown
 from services.deduplication import passes_basic_quality
 from services.offer_filter import passes_quality_filter
@@ -124,19 +124,20 @@ class OfferProcessor:
             except Exception as exc:  # pylint: disable=broad-except
                 logger.debug("Publication deadline skipped (error): %s", exc)
 
-            # Generate affiliate link (includes UTM params and optional Bitly shortening)
-            affiliate_url = get_affiliate_url(data.url, data.store)
+            # Generate offer link (direct or monetised depending on MONETIZED_LINKS_ENABLED)
+            affiliate_url = build_offer_link(data.url, data.store)
             offer.affiliate_url = affiliate_url
 
-            # Persist estimated revenue record
-            short_url = affiliate_url if "bit.ly" in affiliate_url else None
-            record_revenue(
-                self.db,
-                offer,
-                store=data.store,
-                price=data.price,
-                short_url=short_url,
-            )
+            # Persist estimated revenue record only when monetisation is active
+            if settings.MONETIZED_LINKS_ENABLED:
+                short_url = affiliate_url if "bit.ly" in affiliate_url else None
+                record_revenue(
+                    self.db,
+                    offer,
+                    store=data.store,
+                    price=data.price,
+                    short_url=short_url,
+                )
 
             self.db.commit()
             OFFERS_PROCESSED.labels(result="published").inc()

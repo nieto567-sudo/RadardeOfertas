@@ -150,72 +150,156 @@ class TestOfferScorerClassifyScore:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Affiliate link generation (stub – no affiliate APIs are active)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 class TestAffiliateLinks:
-    """Tests for the affiliate URL builder."""
+    """
+    Tests for the affiliate URL stub.
 
-    def test_amazon_adds_tag(self):
-        from services import affiliate
-        with patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", "testtag-20"):
-            url = affiliate.get_affiliate_url(
-                "https://www.amazon.com.mx/dp/B08N5WRWNW", "amazon"
-            )
-        assert "tag=testtag-20" in url
+    Affiliate API integrations have been removed.  ``get_affiliate_url`` now
+    returns the input URL unchanged regardless of store or configuration.
+    """
 
-    def test_amazon_no_tag_returns_original(self):
+    def test_amazon_returns_original_url(self):
         from services import affiliate
         original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
-        with patch.object(affiliate.settings, "AMAZON_AFFILIATE_TAG", ""), \
-             patch.object(affiliate.settings, "BITLY_API_TOKEN", ""), \
-             patch.object(affiliate.settings, "UTM_SOURCE", "radar"), \
-             patch.object(affiliate.settings, "UTM_MEDIUM", "telegram"), \
-             patch.object(affiliate.settings, "UTM_CAMPAIGN", "oferta"):
-            url = affiliate.get_affiliate_url(original, "amazon")
-        # No affiliate tag → no ?tag= param, but UTM params are always added
-        assert "tag=" not in url
-        assert "utm_source=radar" in url
+        result = affiliate.get_affiliate_url(original, "amazon")
+        assert result == original
 
-    def test_mercadolibre_adds_aff_id(self):
+    def test_amazon_no_affiliate_tag_added(self):
         from services import affiliate
-        with patch.object(affiliate.settings, "MERCADOLIBRE_AFFILIATE_ID", "ml123"):
-            url = affiliate.get_affiliate_url(
-                "https://www.mercadolibre.com.mx/laptop", "mercadolibre"
-            )
-        assert "aff_id=ml123" in url
+        original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+        result = affiliate.get_affiliate_url(original, "amazon")
+        assert "tag=" not in result
 
-    def test_aliexpress_returns_portal_url(self):
-        from urllib.parse import urlparse
+    def test_mercadolibre_returns_original_url(self):
         from services import affiliate
-        with patch.object(affiliate.settings, "ALIEXPRESS_AFFILIATE_KEY", "alikey"):
-            url = affiliate.get_affiliate_url(
-                "https://www.aliexpress.com/item/123.html", "aliexpress"
-            )
-        parsed = urlparse(url)
-        assert parsed.scheme == "https"
-        assert parsed.netloc == "portals.aliexpress.com"
-        assert "alikey" in url
+        original = "https://www.mercadolibre.com.mx/laptop"
+        result = affiliate.get_affiliate_url(original, "mercadolibre")
+        assert result == original
 
-    def test_ebay_returns_rover_url(self):
-        from urllib.parse import urlparse
+    def test_walmart_returns_original_url(self):
         from services import affiliate
-        with patch.object(affiliate.settings, "EBAY_CAMPAIGN_ID", "5338-12345-6"):
-            url = affiliate.get_affiliate_url(
-                "https://www.ebay.com/itm/123", "ebay"
-            )
-        parsed = urlparse(url)
-        assert parsed.scheme == "https"
-        assert parsed.netloc == "rover.ebay.com"
+        original = "https://www.walmart.com.mx/producto/1234"
+        result = affiliate.get_affiliate_url(original, "walmart")
+        assert result == original
 
     def test_unknown_store_returns_original(self):
         from services import affiliate
         original = "https://unknown-store.com/product/1"
-        with patch.object(affiliate.settings, "BITLY_API_TOKEN", ""), \
-             patch.object(affiliate.settings, "UTM_SOURCE", "radar"), \
-             patch.object(affiliate.settings, "UTM_MEDIUM", "telegram"), \
-             patch.object(affiliate.settings, "UTM_CAMPAIGN", "oferta"):
-            url = affiliate.get_affiliate_url(original, "unknown_store")
-        # No affiliate programme → base URL is unchanged, but UTM params still added
-        assert "unknown-store.com/product/1" in url
-        assert "utm_source=radar" in url
+        result = affiliate.get_affiliate_url(original, "unknown_store")
+        assert result == original
+
+    def test_no_utm_params_added(self):
+        """Affiliate stub must not inject UTM tracking parameters."""
+        from services import affiliate
+        original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+        result = affiliate.get_affiliate_url(original, "amazon")
+        assert "utm_source" not in result
+        assert "utm_medium" not in result
+        assert "utm_campaign" not in result
+
+    def test_no_bitly_shortening(self):
+        """Affiliate stub must not produce shortened Bitly URLs."""
+        from services import affiliate
+        original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+        result = affiliate.get_affiliate_url(original, "amazon")
+        assert "bit.ly" not in result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# link_builder – build_offer_link feature flag
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestLinkBuilder:
+    """Tests for the MONETIZED_LINKS_ENABLED feature flag in link_builder."""
+
+    _AMAZON_URL = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+    _WALMART_URL = "https://www.walmart.com.mx/producto/1234"
+    _UNKNOWN_URL = "https://unknown-store.com/product/1"
+
+    # ── Direct mode (MONETIZED_LINKS_ENABLED=false, the default) ─────────────
+
+    def test_build_direct_link_returns_url_unchanged(self):
+        from services.link_builder import build_direct_link
+        url = self._AMAZON_URL
+        assert build_direct_link(url) == url
+
+    def test_build_offer_link_direct_mode_no_affiliate_tag(self):
+        """With monetisation disabled, no affiliate tag is added."""
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", False):
+            result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
+        assert result == self._AMAZON_URL
+        assert "tag=" not in result
+
+    def test_build_offer_link_direct_mode_no_utm(self):
+        """With monetisation disabled, no UTM parameters are added."""
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", False):
+            result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
+        assert "utm_source" not in result
+        assert "utm_medium" not in result
+        assert "utm_campaign" not in result
+
+    def test_build_offer_link_direct_mode_no_bitly(self):
+        """With monetisation disabled, the URL is never shortened."""
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", False):
+            result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
+        assert "bit.ly" not in result
+
+    def test_build_offer_link_direct_mode_returns_exact_input(self):
+        """Direct mode must return exactly the input URL for unknown stores too."""
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", False):
+            result = link_builder.build_offer_link(self._UNKNOWN_URL, "unknown_store")
+        assert result == self._UNKNOWN_URL
+
+    def test_build_offer_link_direct_mode_walmart_no_admitad(self):
+        """Admitad deep-link must NOT be applied when monetisation is disabled."""
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", False):
+            result = link_builder.build_offer_link(self._WALMART_URL, "walmart")
+        assert result == self._WALMART_URL
+        assert "admitad" not in result
+
+    # ── Monetised mode (MONETIZED_LINKS_ENABLED=true) ────────────────────────
+
+    def test_build_offer_link_monetised_mode_returns_url(self):
+        """
+        With monetization enabled, build_offer_link delegates to the affiliate
+        stub which currently also returns the URL unchanged.  This test ensures
+        the flag is respected and no exception is raised.
+        """
+        from services import link_builder
+        with patch.object(link_builder.settings, "MONETIZED_LINKS_ENABLED", True):
+            result = link_builder.build_offer_link(self._AMAZON_URL, "amazon")
+        # Affiliate stub returns the URL unchanged even in monetised mode
+        assert result == self._AMAZON_URL
+
+    # ── build_direct_link / build_monetized_link unit-level ──────────────────
+
+    def test_build_monetized_link_delegates_to_get_affiliate_url(self):
+        """build_monetized_link must produce the same result as get_affiliate_url."""
+        from services import link_builder, affiliate
+        expected = affiliate.get_affiliate_url(self._AMAZON_URL, "amazon")
+        result = link_builder.build_monetized_link(self._AMAZON_URL, "amazon")
+        assert result == expected
+
+    def test_build_monetized_link_uses_affiliate_implementation(self):
+        """build_monetized_link must delegate: if get_affiliate_url is replaced,
+        build_monetized_link reflects the new output."""
+        from unittest.mock import patch
+        from services import link_builder
+        monetized_url = "https://example.com/monetized"
+        with patch("services.link_builder.get_affiliate_url", return_value=monetized_url):
+            result = link_builder.build_monetized_link(self._AMAZON_URL, "amazon")
+        assert result == monetized_url
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -514,161 +598,94 @@ class TestRevenueTrackerEstimates:
 
 
 class TestUTMParameters:
-    """Tests for UTM parameter injection."""
+    """
+    UTM parameter injection has been removed with the affiliate APIs.
+    These tests verify the new behaviour: no UTM params are ever added.
+    """
 
-    def test_utm_added_to_plain_url(self):
-        from services.affiliate import _apply_utm
-        from unittest.mock import patch
+    def test_no_utm_params_on_mexican_store_url(self):
+        from services.affiliate import get_affiliate_url
+        url = "https://www.walmart.com.mx/product/1"
+        result = get_affiliate_url(url, "walmart")
+        assert "utm_source" not in result
+        assert "utm_medium" not in result
+        assert "utm_campaign" not in result
 
-        with patch("services.affiliate.settings") as ms:
-            ms.UTM_SOURCE = "radardeofertas"
-            ms.UTM_MEDIUM = "telegram"
-            ms.UTM_CAMPAIGN = "oferta"
-            url = _apply_utm("https://www.walmart.com.mx/product/1", "walmart")
+    def test_no_utm_params_on_amazon_url(self):
+        from services.affiliate import get_affiliate_url
+        url = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+        result = get_affiliate_url(url, "amazon")
+        assert "utm_source" not in result
 
-        assert "utm_source=radardeofertas" in url
-        assert "utm_medium=telegram" in url
-        assert "utm_campaign=oferta" in url
-        assert "utm_content=walmart" in url
-
-    def test_utm_preserves_existing_params(self):
-        from services.affiliate import _apply_utm
-        from unittest.mock import patch
-
-        with patch("services.affiliate.settings") as ms:
-            ms.UTM_SOURCE = "radar"
-            ms.UTM_MEDIUM = "telegram"
-            ms.UTM_CAMPAIGN = "deal"
-            url = _apply_utm(
-                "https://www.liverpool.com.mx/tienda?color=rojo", "liverpool"
-            )
-
-        assert "color=rojo" in url
-        assert "utm_source=radar" in url
-
-    def test_utm_does_not_crash_on_bad_url(self):
-        from services.affiliate import _apply_utm
-        from unittest.mock import patch
-
-        with patch("services.affiliate.settings") as ms:
-            ms.UTM_SOURCE = "r"
-            ms.UTM_MEDIUM = "t"
-            ms.UTM_CAMPAIGN = "o"
-            # Should return url unchanged if it can't parse
-            result = _apply_utm("not-a-valid-url", "store")
-        assert result  # must return something, not raise
+    def test_url_returned_unchanged(self):
+        from services.affiliate import get_affiliate_url
+        url = "https://www.liverpool.com.mx/tienda?color=rojo"
+        result = get_affiliate_url(url, "liverpool")
+        assert result == url
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Affiliate – Admitad deep links
+# Affiliate – Admitad deep links (removed)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestAdmitadAffiliateLinks:
-    """Tests for Admitad deep-link generation."""
+    """
+    Admitad deep-link generation has been removed with the affiliate APIs.
+    These tests verify that store URLs are returned unchanged.
+    """
 
-    def test_admitad_url_format(self):
-        from services.affiliate import _admitad
-        from urllib.parse import urlparse
-        from unittest.mock import patch
-
-        with patch("services.affiliate.settings") as ms:
-            ms.ADMITAD_PUBLISHER_ID = "mypub"
-            ms.ADMITAD_SITE_IDS = {"walmart": "site99"}
-            url = _admitad("https://www.walmart.com.mx/product", "walmart")
-
-        parsed = urlparse(url)
-        assert parsed.netloc == "ad.admitad.com"
-        assert "site99" in url
-        assert "mypub" in url
-
-    def test_admitad_no_publisher_returns_original(self):
-        from services.affiliate import _admitad
-        from unittest.mock import patch
-
+    def test_walmart_url_unchanged(self):
+        from services.affiliate import get_affiliate_url
         original = "https://www.walmart.com.mx/product"
-        with patch("services.affiliate.settings") as ms:
-            ms.ADMITAD_PUBLISHER_ID = ""
-            ms.ADMITAD_SITE_IDS = {"walmart": "site99"}
-            url = _admitad(original, "walmart")
+        assert get_affiliate_url(original, "walmart") == original
 
-        assert url == original
+    def test_liverpool_url_unchanged(self):
+        from services.affiliate import get_affiliate_url
+        original = "https://www.liverpool.com.mx/producto?color=rojo&size=M"
+        assert get_affiliate_url(original, "liverpool") == original
 
-    def test_admitad_no_site_id_returns_original(self):
-        from services.affiliate import _admitad
-        from unittest.mock import patch
-
+    def test_coppel_url_unchanged(self):
+        from services.affiliate import get_affiliate_url
         original = "https://www.coppel.com/product"
-        with patch("services.affiliate.settings") as ms:
-            ms.ADMITAD_PUBLISHER_ID = "pub123"
-            ms.ADMITAD_SITE_IDS = {}   # no site ID for coppel
-            url = _admitad(original, "coppel")
+        assert get_affiliate_url(original, "coppel") == original
 
-        assert url == original
-
-    def test_admitad_encodes_product_url(self):
-        from services.affiliate import _admitad
-        from unittest.mock import patch
-
-        with patch("services.affiliate.settings") as ms:
-            ms.ADMITAD_PUBLISHER_ID = "pub"
-            ms.ADMITAD_SITE_IDS = {"liverpool": "liv123"}
-            url = _admitad(
-                "https://liverpool.com.mx/producto?color=rojo&size=M",
-                "liverpool",
-            )
-
-        # The product URL must be percent-encoded in the deep link
-        assert "%3A" in url or "liverpool.com.mx" in url  # either encoded or raw
+    def test_no_admitad_domain_in_result(self):
+        from services.affiliate import get_affiliate_url
+        result = get_affiliate_url("https://www.sams.com.mx/product", "sams_club")
+        assert "admitad" not in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Affiliate – Bitly shortener
+# Affiliate – Bitly shortener (removed)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestBitlyShortener:
-    """Tests for the Bitly URL-shortening integration."""
+    """
+    Bitly URL shortening has been removed with the affiliate APIs.
+    These tests verify that URLs are never shortened.
+    """
 
-    def test_no_token_returns_original(self):
-        from services.affiliate import shorten_url
-        from unittest.mock import patch
-
-        original = "https://www.amazon.com.mx/dp/B08N5WRWNW?tag=test"
-        with patch("services.affiliate.settings") as ms:
-            ms.BITLY_API_TOKEN = ""
-            ms.BITLY_GROUP_GUID = ""
-            result = shorten_url(original)
-
+    def test_amazon_url_not_shortened(self):
+        from services.affiliate import get_affiliate_url
+        original = "https://www.amazon.com.mx/dp/B08N5WRWNW"
+        result = get_affiliate_url(original, "amazon")
+        assert "bit.ly" not in result
         assert result == original
 
-    def test_successful_bitly_call(self):
-        from services.affiliate import shorten_url
-        from unittest.mock import patch, MagicMock
+    def test_walmart_url_not_shortened(self):
+        from services.affiliate import get_affiliate_url
+        original = "https://www.walmart.com.mx/product"
+        result = get_affiliate_url(original, "walmart")
+        assert "bit.ly" not in result
+        assert result == original
 
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"link": "https://bit.ly/abc123"}
-        mock_resp.raise_for_status.return_value = None
-
-        with patch("services.affiliate.settings") as ms, \
-             patch("services.affiliate._requests.post", return_value=mock_resp):
-            ms.BITLY_API_TOKEN = "faketoken"
-            ms.BITLY_GROUP_GUID = ""
-            result = shorten_url("https://www.walmart.com.mx/product")
-
-        assert result == "https://bit.ly/abc123"
-
-    def test_bitly_api_failure_returns_original(self):
-        from services.affiliate import shorten_url
-        from unittest.mock import patch
-
-        original = "https://www.coppel.com/product"
-        with patch("services.affiliate.settings") as ms, \
-             patch("services.affiliate._requests.post", side_effect=Exception("timeout")):
-            ms.BITLY_API_TOKEN = "tok"
-            ms.BITLY_GROUP_GUID = ""
-            result = shorten_url(original)
-
+    def test_mercadolibre_url_not_shortened(self):
+        from services.affiliate import get_affiliate_url
+        original = "https://articulo.mercadolibre.com.mx/MLM-123"
+        result = get_affiliate_url(original, "mercadolibre")
+        assert "bit.ly" not in result
         assert result == original
 
 
@@ -2637,17 +2654,22 @@ class TestPriceErrorAdminNotification:
         from unittest.mock import patch, MagicMock
         from telegram.publisher import TelegramPublisher
         from database.models import OfferType
+        from services.publication_guard import GuardResult
 
         offer = self._make_price_error_offer()
         db = MagicMock()
 
         with patch("telegram.publisher.settings") as ms, \
+             patch("telegram.publisher.can_publish",
+                   return_value=GuardResult(allowed=True, reason="ok")), \
+             patch("telegram.publisher.record_published"), \
              patch.object(TelegramPublisher, "_notify_admin_price_error") as mock_notify, \
              patch.object(TelegramPublisher, "_send_message") as mock_send:
             ms.TELEGRAM_BOT_TOKEN = "testtoken"
             ms.TELEGRAM_CHANNEL_ID = "@testchannel"
             ms.TELEGRAM_ADMIN_CHAT_ID = "999"
             ms.PRICE_ERROR_NOTIFY_ADMIN = True
+            ms.DRY_RUN = False
 
             pub = TelegramPublisher.__new__(TelegramPublisher)
             pub.token = "testtoken"
@@ -2663,17 +2685,22 @@ class TestPriceErrorAdminNotification:
         """publish() must NOT call _notify_admin_price_error for non-price-error offers."""
         from unittest.mock import patch, MagicMock
         from telegram.publisher import TelegramPublisher
+        from services.publication_guard import GuardResult
 
         offer = self._make_non_price_error_offer()
         db = MagicMock()
 
         with patch("telegram.publisher.settings") as ms, \
+             patch("telegram.publisher.can_publish",
+                   return_value=GuardResult(allowed=True, reason="ok")), \
+             patch("telegram.publisher.record_published"), \
              patch.object(TelegramPublisher, "_notify_admin_price_error") as mock_notify, \
              patch.object(TelegramPublisher, "_send_message") as mock_send:
             ms.TELEGRAM_BOT_TOKEN = "testtoken"
             ms.TELEGRAM_CHANNEL_ID = "@testchannel"
             ms.TELEGRAM_ADMIN_CHAT_ID = "999"
             ms.PRICE_ERROR_NOTIFY_ADMIN = True
+            ms.DRY_RUN = False
 
             pub = TelegramPublisher.__new__(TelegramPublisher)
             pub.token = "testtoken"
@@ -2689,17 +2716,22 @@ class TestPriceErrorAdminNotification:
         """publish() skips admin notification when PRICE_ERROR_NOTIFY_ADMIN=false."""
         from unittest.mock import patch, MagicMock
         from telegram.publisher import TelegramPublisher
+        from services.publication_guard import GuardResult
 
         offer = self._make_price_error_offer()
         db = MagicMock()
 
         with patch("telegram.publisher.settings") as ms, \
+             patch("telegram.publisher.can_publish",
+                   return_value=GuardResult(allowed=True, reason="ok")), \
+             patch("telegram.publisher.record_published"), \
              patch.object(TelegramPublisher, "_notify_admin_price_error") as mock_notify, \
              patch.object(TelegramPublisher, "_send_message") as mock_send:
             ms.TELEGRAM_BOT_TOKEN = "testtoken"
             ms.TELEGRAM_CHANNEL_ID = "@testchannel"
             ms.TELEGRAM_ADMIN_CHAT_ID = "999"
             ms.PRICE_ERROR_NOTIFY_ADMIN = False
+            ms.DRY_RUN = False
 
             pub = TelegramPublisher.__new__(TelegramPublisher)
             pub.token = "testtoken"
@@ -2747,6 +2779,7 @@ class TestPriceErrorAdminNotification:
         """A failing admin notification must NOT prevent the channel post."""
         from unittest.mock import patch, MagicMock
         from telegram.publisher import TelegramPublisher
+        from services.publication_guard import GuardResult
 
         offer = self._make_price_error_offer()
         db = MagicMock()
@@ -2755,6 +2788,9 @@ class TestPriceErrorAdminNotification:
             raise RuntimeError("Network error")
 
         with patch("telegram.publisher.settings") as ms, \
+             patch("telegram.publisher.can_publish",
+                   return_value=GuardResult(allowed=True, reason="ok")), \
+             patch("telegram.publisher.record_published"), \
              patch.object(TelegramPublisher, "_notify_admin_price_error",
                           side_effect=fail_notify), \
              patch.object(TelegramPublisher, "_send_message") as mock_send:
@@ -2762,6 +2798,7 @@ class TestPriceErrorAdminNotification:
             ms.TELEGRAM_CHANNEL_ID = "@testchannel"
             ms.TELEGRAM_ADMIN_CHAT_ID = "999"
             ms.PRICE_ERROR_NOTIFY_ADMIN = True
+            ms.DRY_RUN = False
 
             pub = TelegramPublisher.__new__(TelegramPublisher)
             pub.token = "testtoken"
@@ -2773,3 +2810,334 @@ class TestPriceErrorAdminNotification:
 
         # Channel message was sent despite admin notification failure
         mock_send.assert_called_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PublicationGuard
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestPublicationGuard:
+    """Tests for services.publication_guard."""
+
+    # ── URL normalisation ─────────────────────────────────────────────────────
+
+    def test_normalise_strips_utm_params(self):
+        from services.publication_guard import normalise_url
+        raw = "https://www.amazon.com.mx/dp/B08N5?utm_source=fb&utm_medium=social"
+        result = normalise_url(raw)
+        assert "utm_source" not in result
+        assert "utm_medium" not in result
+        assert "amazon.com.mx" in result
+
+    def test_normalise_strips_ref_param(self):
+        from services.publication_guard import normalise_url
+        raw = "https://www.walmart.com.mx/p/123?color=rojo&ref=home"
+        result = normalise_url(raw)
+        assert "ref=" not in result
+        assert "color=rojo" in result
+
+    def test_normalise_strips_fbclid(self):
+        from services.publication_guard import normalise_url
+        raw = "https://example.com/p?id=1&fbclid=abc123"
+        result = normalise_url(raw)
+        assert "fbclid" not in result
+        assert "id=1" in result
+
+    def test_normalise_strips_fragment(self):
+        from services.publication_guard import normalise_url
+        raw = "https://example.com/p?id=1#section"
+        result = normalise_url(raw)
+        assert "#section" not in result
+
+    def test_normalise_preserves_non_tracking_params(self):
+        from services.publication_guard import normalise_url
+        raw = "https://example.com/product?sku=ABC&color=blue"
+        result = normalise_url(raw)
+        assert "sku=ABC" in result
+        assert "color=blue" in result
+
+    def test_normalise_url_no_params(self):
+        from services.publication_guard import normalise_url
+        raw = "https://www.liverpool.com.mx/p/tv-55"
+        assert normalise_url(raw) == raw
+
+    # ── Category whitelist ────────────────────────────────────────────────────
+
+    def test_allowed_category_passes(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Celulares y Smartphones"]), \
+             patch.object(publication_guard.settings, "MAX_PUBLICATIONS_PER_HOUR", 100), \
+             patch.object(publication_guard.settings, "MIN_SECONDS_BETWEEN_PUBLICATIONS", 0), \
+             patch("services.publication_guard.is_duplicate", return_value=False):
+            result = publication_guard.can_publish(
+                "https://example.com/p", 999.0, "Celulares y Smartphones"
+            )
+        assert result.allowed is True
+
+    def test_disallowed_category_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Celulares y Smartphones"]):
+            result = publication_guard.can_publish(
+                "https://example.com/p", 999.0, "Libros y Educación"
+            )
+        assert result.allowed is False
+        assert result.reason == "categoria_no_permitida"
+
+    def test_empty_category_rejected(self):
+        from services import publication_guard
+        result = publication_guard.can_publish("https://example.com/p", 999.0, "")
+        assert result.allowed is False
+        assert result.reason == "categoria_vacia"
+
+    def test_none_category_rejected(self):
+        from services import publication_guard
+        result = publication_guard.can_publish("https://example.com/p", 999.0, None)
+        assert result.allowed is False
+        assert result.reason == "categoria_vacia"
+
+    # ── Price validation ──────────────────────────────────────────────────────
+
+    def test_none_price_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Gaming y Videojuegos"]):
+            result = publication_guard.can_publish(
+                "https://example.com/p", None, "Gaming y Videojuegos"
+            )
+        assert result.allowed is False
+        assert result.reason == "sin_precio"
+
+    def test_zero_price_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Gaming y Videojuegos"]):
+            result = publication_guard.can_publish(
+                "https://example.com/p", 0.0, "Gaming y Videojuegos"
+            )
+        assert result.allowed is False
+        assert result.reason == "precio_invalido"
+
+    def test_negative_price_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Gaming y Videojuegos"]):
+            result = publication_guard.can_publish(
+                "https://example.com/p", -10.0, "Gaming y Videojuegos"
+            )
+        assert result.allowed is False
+        assert result.reason == "precio_invalido"
+
+    # ── URL validation ────────────────────────────────────────────────────────
+
+    def test_empty_url_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Electrodomésticos"]):
+            result = publication_guard.can_publish("", 500.0, "Electrodomésticos")
+        assert result.allowed is False
+        assert result.reason == "sin_url"
+
+    def test_invalid_url_scheme_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Electrodomésticos"]):
+            result = publication_guard.can_publish(
+                "ftp://example.com/product", 500.0, "Electrodomésticos"
+            )
+        assert result.allowed is False
+        assert result.reason == "url_invalida"
+
+    def test_http_url_accepted(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Electrodomésticos"]), \
+             patch.object(publication_guard.settings, "MAX_PUBLICATIONS_PER_HOUR", 100), \
+             patch.object(publication_guard.settings, "MIN_SECONDS_BETWEEN_PUBLICATIONS", 0), \
+             patch("services.publication_guard.is_duplicate", return_value=False):
+            result = publication_guard.can_publish(
+                "http://example.com/product", 500.0, "Electrodomésticos"
+            )
+        assert result.allowed is True
+
+    # ── 24-hour deduplication ─────────────────────────────────────────────────
+
+    def test_duplicate_url_rejected(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Televisores y Audio"]), \
+             patch("services.publication_guard.is_duplicate", return_value=True):
+            result = publication_guard.can_publish(
+                "https://example.com/tv", 2999.0, "Televisores y Audio"
+            )
+        assert result.allowed is False
+        assert result.reason == "duplicado_24h"
+
+    def test_non_duplicate_passes(self):
+        from services import publication_guard
+        with patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Televisores y Audio"]), \
+             patch.object(publication_guard.settings, "MAX_PUBLICATIONS_PER_HOUR", 100), \
+             patch.object(publication_guard.settings, "MIN_SECONDS_BETWEEN_PUBLICATIONS", 0), \
+             patch("services.publication_guard.is_duplicate", return_value=False):
+            result = publication_guard.can_publish(
+                "https://example.com/tv", 2999.0, "Televisores y Audio"
+            )
+        assert result.allowed is True
+
+    def test_is_duplicate_false_for_unknown_url(self):
+        """is_duplicate returns False for a URL not in an empty store."""
+        import json
+        import tempfile
+        import os
+        from services import publication_guard
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({}, f)
+            tmp_path = f.name
+        try:
+            with patch.object(publication_guard.settings, "PUBLISHED_URLS_FILE", tmp_path):
+                assert publication_guard.is_duplicate("https://example.com/p") is False
+        finally:
+            os.unlink(tmp_path)
+
+    def test_is_duplicate_true_after_record_published(self):
+        """A URL is a duplicate right after record_published()."""
+        import tempfile
+        import os
+        from services import publication_guard
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{}")
+            tmp_path = f.name
+        try:
+            with patch.object(publication_guard.settings, "PUBLISHED_URLS_FILE", tmp_path):
+                url = "https://www.walmart.com.mx/p/unique-item-xyz"
+                normalised = publication_guard.normalise_url(url)
+                publication_guard._add_to_published_store(normalised)
+                assert publication_guard.is_duplicate(normalised) is True
+        finally:
+            os.unlink(tmp_path)
+
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+
+    def test_rate_limit_hourly_cap(self):
+        from services import publication_guard
+        from services.publication_guard import _RateState
+        # Simulate a full window
+        fake_state = _RateState(window_count=100, window_start_ts=0.0)
+        with patch("services.publication_guard._rate_state", fake_state), \
+             patch.object(publication_guard.settings, "MAX_PUBLICATIONS_PER_HOUR", 5), \
+             patch.object(publication_guard.settings, "MIN_SECONDS_BETWEEN_PUBLICATIONS", 0), \
+             patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Ropa y Accesorios"]), \
+             patch("services.publication_guard.is_duplicate", return_value=False):
+            # window_age > 3600 so the window resets; force window_count back up
+            fake_state.window_start_ts = publication_guard.time.monotonic()
+            fake_state.window_count = 5  # at cap
+            result = publication_guard.can_publish(
+                "https://example.com/p", 99.0, "Ropa y Accesorios"
+            )
+        assert result.allowed is False
+        assert result.reason == "rate_limited"
+
+    def test_rate_limit_min_gap(self):
+        from services import publication_guard
+        from services.publication_guard import _RateState
+        import time as _time
+        # last publish was just now
+        fake_state = _RateState(
+            last_publish_ts=_time.monotonic(),
+            window_count=0,
+            window_start_ts=_time.monotonic(),
+        )
+        with patch("services.publication_guard._rate_state", fake_state), \
+             patch.object(publication_guard.settings, "MAX_PUBLICATIONS_PER_HOUR", 100), \
+             patch.object(publication_guard.settings, "MIN_SECONDS_BETWEEN_PUBLICATIONS", 60), \
+             patch.object(publication_guard.settings, "ALLOWED_CATEGORIES",
+                          ["Ropa y Accesorios"]), \
+             patch("services.publication_guard.is_duplicate", return_value=False):
+            result = publication_guard.can_publish(
+                "https://example.com/p", 99.0, "Ropa y Accesorios"
+            )
+        assert result.allowed is False
+        assert result.reason == "rate_limited"
+
+    # ── Publisher integration ─────────────────────────────────────────────────
+
+    def test_publisher_discards_bad_category(self):
+        """TelegramPublisher.publish returns a failed Publication for bad category."""
+        from telegram.publisher import TelegramPublisher
+        from unittest.mock import MagicMock
+        from services.publication_guard import GuardResult
+
+        offer = MagicMock()
+        offer.id = 1
+        offer.current_price = 999.0
+        offer.affiliate_url = None
+        offer.product.url = "https://example.com/p"
+        offer.product.category = "Mascotas"  # not in whitelist
+        offer.product.image_url = None
+
+        db = MagicMock()
+
+        with patch("services.publication_guard.settings") as gs, \
+             patch("telegram.publisher.settings") as ts:
+            gs.ALLOWED_CATEGORIES = ["Celulares y Smartphones"]
+            gs.MAX_PUBLICATIONS_PER_HOUR = 100
+            gs.MIN_SECONDS_BETWEEN_PUBLICATIONS = 0
+            gs.PUBLISHED_URLS_FILE = "/tmp/test_guard_pub.json"
+            ts.DRY_RUN = False
+            ts.TELEGRAM_BOT_TOKEN = "tok"
+            ts.TELEGRAM_CHANNEL_ID = "@ch"
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "tok"
+            pub.channel_id = "@ch"
+            pub._base = "https://api.telegram.org/bottok"
+
+            result = pub.publish(offer, db)
+
+        assert result.success is False
+        assert result.error_message == "categoria_no_permitida"
+
+    def test_publisher_dry_run_does_not_send(self):
+        """In DRY_RUN mode the publisher never calls the Telegram API."""
+        from telegram.publisher import TelegramPublisher
+        from unittest.mock import MagicMock
+
+        offer = MagicMock()
+        offer.id = 2
+        offer.current_price = 1500.0
+        offer.affiliate_url = None
+        offer.product.url = "https://example.com/tv"
+        offer.product.category = "Televisores y Audio"
+        offer.product.image_url = None
+
+        db = MagicMock()
+
+        with patch("services.publication_guard.settings") as gs, \
+             patch("telegram.publisher.settings") as ts, \
+             patch("services.publication_guard.is_duplicate", return_value=False), \
+             patch.object(TelegramPublisher, "_send_message") as mock_send, \
+             patch.object(TelegramPublisher, "_send_photo") as mock_photo:
+            gs.ALLOWED_CATEGORIES = ["Televisores y Audio"]
+            gs.MAX_PUBLICATIONS_PER_HOUR = 100
+            gs.MIN_SECONDS_BETWEEN_PUBLICATIONS = 0
+            gs.PUBLISHED_URLS_FILE = "/tmp/test_guard_dry.json"
+            ts.DRY_RUN = True
+            ts.TELEGRAM_BOT_TOKEN = "tok"
+            ts.TELEGRAM_CHANNEL_ID = "@ch"
+            ts.PRICE_ERROR_NOTIFY_ADMIN = False
+
+            pub = TelegramPublisher.__new__(TelegramPublisher)
+            pub.token = "tok"
+            pub.channel_id = "@ch"
+            pub._base = "https://api.telegram.org/bottok"
+
+            result = pub.publish(offer, db)
+
+        mock_send.assert_not_called()
+        mock_photo.assert_not_called()
+        assert result.success is False
+        assert result.error_message == "dry_run"

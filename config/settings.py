@@ -12,6 +12,10 @@ DATABASE_URL: str = os.getenv(
     "DATABASE_URL",
     "postgresql://radar:radar@localhost:5432/radardeofertas",
 )
+# Railway (and some other PaaS platforms) inject DATABASE_URL with the legacy
+# "postgres://" scheme.  SQLAlchemy 1.4+ requires "postgresql://".
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
 
 # ── Redis / Celery ───────────────────────────────────────────────────────────
 REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -40,36 +44,13 @@ for _entry in _admin_ids_raw.split(","):
             _entry,
         )
 
-# ── Affiliate tags ────────────────────────────────────────────────────────────
-AMAZON_AFFILIATE_TAG: str = os.getenv("AMAZON_AFFILIATE_TAG", "")
-MERCADOLIBRE_AFFILIATE_ID: str = os.getenv("MERCADOLIBRE_AFFILIATE_ID", "")
-ALIEXPRESS_AFFILIATE_KEY: str = os.getenv("ALIEXPRESS_AFFILIATE_KEY", "")
-EBAY_CAMPAIGN_ID: str = os.getenv("EBAY_CAMPAIGN_ID", "")
-
-# Admitad – affiliate network covering Walmart MX, Liverpool, Coppel,
-# Costco, Sam's Club, Soriana, Office Depot/Max, and many more.
-# Sign up at: https://www.admitad.com/en/publisher/
-ADMITAD_PUBLISHER_ID: str = os.getenv("ADMITAD_PUBLISHER_ID", "")
-# JSON dict mapping store_name → Admitad campaign site-ID for that store.
-# Example env value:  '{"walmart":"abc123","liverpool":"def456"}'
-# Find the site ID for each store inside your Admitad publisher dashboard.
-import json as _json  # local import to avoid polluting namespace
-
-_ADMITAD_SITE_IDS_RAW: str = os.getenv("ADMITAD_SITE_IDS", "{}")
-try:
-    ADMITAD_SITE_IDS: dict = _json.loads(_ADMITAD_SITE_IDS_RAW)
-except Exception:
-    ADMITAD_SITE_IDS: dict = {}
-
-# Bitly – URL shortener that also tracks click counts.
-# Sign up at: https://bitly.com  (free: 1 000 links/month)
-BITLY_API_TOKEN: str = os.getenv("BITLY_API_TOKEN", "")
-BITLY_GROUP_GUID: str = os.getenv("BITLY_GROUP_GUID", "")
-
-# UTM campaign name appended to all affiliate/tracked links.
-UTM_SOURCE: str = os.getenv("UTM_SOURCE", "radardeofertas")
-UTM_MEDIUM: str = os.getenv("UTM_MEDIUM", "telegram")
-UTM_CAMPAIGN: str = os.getenv("UTM_CAMPAIGN", "oferta")
+# ── Monetisation feature flag ─────────────────────────────────────────────────
+# Set to "true" to enable affiliate links, UTM parameters and Bitly shortening.
+# When "false" (default) the bot publishes only the plain canonical product URL
+# with no affiliate tags, no UTM tracking and no URL shortening.
+MONETIZED_LINKS_ENABLED: bool = (
+    os.getenv("MONETIZED_LINKS_ENABLED", "false").lower() == "true"
+)
 
 # ── Offer detection thresholds ────────────────────────────────────────────────
 # Percentage of average price below which an offer is classified.
@@ -203,3 +184,33 @@ DEDUP_CROSS_STORE: bool = os.getenv("DEDUP_CROSS_STORE", "false").lower() == "tr
 REQUIRE_IMAGE: bool = os.getenv("REQUIRE_IMAGE", "false").lower() == "true"
 # Minimum product title length (shorter titles are rejected as garbage).
 MIN_TITLE_LENGTH: int = int(os.getenv("MIN_TITLE_LENGTH", "10"))
+
+# ── Publication guard ─────────────────────────────────────────────────────────
+# Whitelist of allowed categories (comma-separated).  Offers whose category
+# does not appear in this list are silently discarded before publishing.
+# Default matches the five categories defined in the product classifier.
+_ALLOWED_CATEGORIES_RAW: str = os.getenv(
+    "ALLOWED_CATEGORIES",
+    "Celulares y Smartphones,Gaming y Videojuegos,Televisores y Audio,"
+    "Electrodomésticos,Ropa y Accesorios",
+)
+ALLOWED_CATEGORIES: list[str] = [
+    c.strip() for c in _ALLOWED_CATEGORIES_RAW.split(",") if c.strip()
+]
+
+# Maximum publications per rolling 60-minute window.
+MAX_PUBLICATIONS_PER_HOUR: int = int(os.getenv("MAX_PUBLICATIONS_PER_HOUR", "15"))
+
+# Minimum seconds that must pass between any two consecutive publications.
+MIN_SECONDS_BETWEEN_PUBLICATIONS: int = int(
+    os.getenv("MIN_SECONDS_BETWEEN_PUBLICATIONS", "5")
+)
+
+# Dry-run mode: when "true" no message is actually sent to Telegram.
+# All other logic (validation, dedup tracking) runs normally.
+DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
+
+# Path for the JSON file that persists recently published URLs for 24h dedup.
+# Defaults to /tmp so it works on ephemeral filesystems (Railway, Heroku, etc.).
+# Override with a path inside a persistent volume when available.
+PUBLISHED_URLS_FILE: str = os.getenv("PUBLISHED_URLS_FILE", "/tmp/published_urls.json")

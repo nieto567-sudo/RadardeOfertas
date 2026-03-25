@@ -19,6 +19,7 @@ from services.offer_scorer import OfferScorer
 from services.price_comparison import compare_across_stores
 from services.price_sparkline import get_sparkline, is_all_time_low
 from services.price_trend import get_price_trend, trend_emoji
+from services.publication_guard import can_publish, record_published
 from services.resale_detector import detect_resale_opportunity
 from services.seasonal_events import get_season_banner
 from services.viral_detector import calculate_viral_score, viral_label
@@ -45,6 +46,11 @@ class TelegramPublisher:
         """
         Send *offer* to the Telegram channel and persist the result.
 
+        The offer is validated by the publication guard before any Telegram
+        API call is made.  Discarded offers are logged with the discard reason
+        and a :class:`Publication` record is still returned (with
+        ``success=False``) so callers always receive a consistent object.
+
         For ``PRICE_ERROR`` offers, a private notification is sent to
         ``TELEGRAM_ADMIN_CHAT_ID`` *before* the channel post, so the admin
         gets a heads-up about every pricing mistake detected.
@@ -57,8 +63,39 @@ class TelegramPublisher:
             Active SQLAlchemy session used to persist the :class:`Publication`.
         """
         product = offer.product
-        message = self._build_message(offer, db)
+        url = offer.affiliate_url or product.url
         pub = Publication(offer_id=offer.id)
+
+        # ── Publication guard ─────────────────────────────────────────────────
+        guard = can_publish(
+            url=url,
+            price=offer.current_price,
+            category=product.category,
+        )
+        if not guard.allowed:
+            logger.info(
+                "Offer %d discarded by publication guard: %s",
+                offer.id,
+                guard.reason,
+            )
+            pub.success = False
+            pub.error_message = guard.reason
+            db.add(pub)
+            return pub
+
+        # ── Dry-run mode ──────────────────────────────────────────────────────
+        if settings.DRY_RUN:
+            logger.info(
+                "DRY_RUN active — offer %d would be published (url=%s)",
+                offer.id,
+                url,
+            )
+            pub.success = False
+            pub.error_message = "dry_run"
+            db.add(pub)
+            return pub
+
+        message = self._build_message(offer, db)
 
         # ── Admin pre-notification for price errors ───────────────────────────
         if (
@@ -84,8 +121,13 @@ class TelegramPublisher:
 
             pub.telegram_message_id = result.get("message_id")
             pub.success = True
+            record_published(url)
         except Exception as exc:  # pylint: disable=broad-except
-            logger.error("Telegram publish failed for offer %d: %s", offer.id, exc)
+            logger.error(
+                "Telegram publish failed for offer %d: %s | reason=telegram_error",
+                offer.id,
+                exc,
+            )
             pub.success = False
             pub.error_message = str(exc)
 

@@ -1,0 +1,19 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  RadardeOfertas – Railway configuration                                  ║
+# ║                                                                          ║
+# ║  This file configures the DEFAULT service (Celery worker).               ║
+# ║  For the beat scheduler, create a second Railway service from the same   ║
+# ║  repo and override startCommand to:                                      ║
+# ║    celery -A workers.celery_app beat --loglevel=info                     ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Initialise the DB schema then start the Celery worker.
+# `init-db` is idempotent (CREATE TABLE IF NOT EXISTS), safe to run on every start.
+startCommand = "python main.py init-db && celery -A workers.celery_app worker --loglevel=info --concurrency=4"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
