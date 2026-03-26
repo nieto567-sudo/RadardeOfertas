@@ -216,6 +216,16 @@ def scrape_claro_shop(self):
     return _process_store("claro_shop")
 
 
+@app.task(name="tasks.scrape_bestbuy", bind=True, max_retries=3)
+def scrape_bestbuy(self):
+    return _process_store("bestbuy")
+
+
+@app.task(name="tasks.scrape_falabella", bind=True, max_retries=3)
+def scrape_falabella(self):
+    return _process_store("falabella")
+
+
 # ── Daily digest ──────────────────────────────────────────────────────────────
 
 

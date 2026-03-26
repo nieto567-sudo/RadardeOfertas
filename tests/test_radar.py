@@ -3883,3 +3883,374 @@ class TestAmazonScraperImproved:
         assert results[0].price == 18999.0
         assert results[0].external_id == "B0CHX1W1XY"
         assert results[0].store == "amazon"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Best Buy Mexico scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestBestBuyScraper:
+    """Unit tests for the Best Buy Mexico scraper."""
+
+    def test_store_name(self):
+        from scrapers.bestbuy import BestBuyScraper
+        assert BestBuyScraper.store_name == "bestbuy"
+
+    def test_base_url(self):
+        from scrapers.bestbuy import BestBuyScraper
+        assert BestBuyScraper.BASE_URL == "https://www.bestbuy.com.mx"
+
+    def test_registered_in_manager(self):
+        from scrapers.manager import ALL_SCRAPERS
+        stores = [cls.store_name for cls in ALL_SCRAPERS]
+        assert "bestbuy" in stores
+
+    def test_default_queries_not_empty(self):
+        from scrapers.bestbuy import DEFAULT_QUERIES
+        assert len(DEFAULT_QUERIES) >= 5
+
+    def test_parse_api_response(self):
+        """_search_api must parse a JSON product list."""
+        from scrapers.bestbuy import BestBuyScraper
+        from unittest.mock import patch, MagicMock
+
+        scraper = BestBuyScraper.__new__(BestBuyScraper)
+        scraper.session = MagicMock()
+        scraper.timeout = 10
+        scraper.delay = 0
+
+        api_data = {
+            "products": [
+                {
+                    "sku": "6525591",
+                    "name": "Apple iPhone 15 128GB Azul",
+                    "salePrice": 19999.0,
+                    "url": "/site/apple-iphone-15/6525591.p",
+                    "image": "/images/6525591.jpg",
+                    "onSale": True,
+                }
+            ]
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = api_data
+        with patch.object(scraper, "get", return_value=mock_resp):
+            results = scraper._search_api("iphone")
+
+        assert len(results) == 1
+        assert results[0].name == "Apple iPhone 15 128GB Azul"
+        assert results[0].price == 19999.0
+        assert results[0].store == "bestbuy"
+        assert results[0].external_id == "6525591"
+
+    def test_api_skips_missing_price(self):
+        from scrapers.bestbuy import BestBuyScraper
+        from unittest.mock import patch, MagicMock
+
+        scraper = BestBuyScraper.__new__(BestBuyScraper)
+        scraper.session = MagicMock()
+        scraper.timeout = 10
+        scraper.delay = 0
+
+        api_data = {"products": [{"sku": "999", "name": "Ghost Product"}]}
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = api_data
+        with patch.object(scraper, "get", return_value=mock_resp):
+            results = scraper._search_api("ghost")
+
+        assert results == []
+
+    def test_search_html_parses_cards(self):
+        """_search_html must extract products from HTML."""
+        from scrapers.bestbuy import BestBuyScraper
+        from bs4 import BeautifulSoup
+
+        scraper = BestBuyScraper.__new__(BestBuyScraper)
+
+        html = """
+        <html><body>
+          <li class="sku-item">
+            <h4 class="sku-title"><a href="/site/product/123.p">Samsung TV 55"</a></h4>
+            <div class="priceView-hero-price"><span>$14,999.00</span></div>
+            <img src="https://img.bestbuy.com.mx/img.jpg"/>
+          </li>
+        </body></html>
+        """
+        mock_resp = MagicMock()
+        mock_resp.text = html
+        from unittest.mock import patch
+        with patch.object(scraper, "get", return_value=mock_resp):
+            results = scraper._search_html("televisión")
+
+        assert len(results) == 1
+        assert results[0].store == "bestbuy"
+        assert results[0].price == 14999.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Falabella Mexico scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestFalabellaScraper:
+    """Unit tests for the Falabella Mexico scraper."""
+
+    def test_store_name(self):
+        from scrapers.falabella import FalabellaScraper
+        assert FalabellaScraper.store_name == "falabella"
+
+    def test_base_url(self):
+        from scrapers.falabella import FalabellaScraper
+        assert FalabellaScraper.BASE_URL == "https://www.falabella.com.mx"
+
+    def test_registered_in_manager(self):
+        from scrapers.manager import ALL_SCRAPERS
+        stores = [cls.store_name for cls in ALL_SCRAPERS]
+        assert "falabella" in stores
+
+    def test_default_queries_not_empty(self):
+        from scrapers.falabella import DEFAULT_QUERIES
+        assert len(DEFAULT_QUERIES) >= 5
+
+    def test_parse_api_response_top_level_results(self):
+        """_search_api must handle top-level 'results' key."""
+        from scrapers.falabella import FalabellaScraper
+        from unittest.mock import patch, MagicMock
+
+        scraper = FalabellaScraper.__new__(FalabellaScraper)
+        scraper.session = MagicMock()
+        scraper.timeout = 10
+        scraper.delay = 0
+
+        api_data = {
+            "results": [
+                {
+                    "productId": "PRD001",
+                    "displayName": "Samsung Galaxy S24 Ultra",
+                    "prices": {"salePrice": 25999.0, "normalPrice": 29999.0},
+                    "url": "/falabella-mx/product/PRD001",
+                    "media": [{"url": "https://falabella.scene7.com/img/PRD001.jpg"}],
+                    "breadcrumb": [{"displayName": "Celulares"}],
+                }
+            ]
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = api_data
+        with patch.object(scraper, "get", return_value=mock_resp):
+            results = scraper._search_api("samsung")
+
+        assert len(results) == 1
+        assert results[0].name == "Samsung Galaxy S24 Ultra"
+        assert results[0].price == 25999.0
+        assert results[0].store == "falabella"
+        assert results[0].external_id == "PRD001"
+        assert results[0].category == "Celulares"
+
+    def test_parse_api_response_nested_data(self):
+        """_search_api must handle nested data.results structure."""
+        from scrapers.falabella import FalabellaScraper
+        from unittest.mock import patch, MagicMock
+
+        scraper = FalabellaScraper.__new__(FalabellaScraper)
+        scraper.session = MagicMock()
+        scraper.timeout = 10
+        scraper.delay = 0
+
+        api_data = {
+            "data": {
+                "results": [
+                    {
+                        "productId": "PRD002",
+                        "displayName": "LG Smart TV 55",
+                        "prices": {"normalPrice": 18999.0},
+                        "url": "/falabella-mx/product/PRD002",
+                    }
+                ]
+            }
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = api_data
+        with patch.object(scraper, "get", return_value=mock_resp):
+            results = scraper._search_api("tv")
+
+        assert len(results) == 1
+        assert results[0].price == 18999.0
+
+    def test_api_skips_zero_price(self):
+        from scrapers.falabella import FalabellaScraper
+        from unittest.mock import patch, MagicMock
+
+        scraper = FalabellaScraper.__new__(FalabellaScraper)
+        scraper.session = MagicMock()
+        scraper.timeout = 10
+        scraper.delay = 0
+
+        api_data = {
+            "results": [
+                {"productId": "X1", "displayName": "Ghost", "prices": {"salePrice": 0}}
+            ]
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = api_data
+        with patch.object(scraper, "get", return_value=mock_resp):
+            results = scraper._search_api("ghost")
+
+        assert results == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# New Celery tasks (bestbuy, falabella)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestNewScraperTasks:
+    """Verify that bestbuy and falabella Celery tasks are registered."""
+
+    def test_scrape_bestbuy_task_registered(self):
+        from workers.tasks import scrape_bestbuy
+        assert scrape_bestbuy.name == "tasks.scrape_bestbuy"
+
+    def test_scrape_falabella_task_registered(self):
+        from workers.tasks import scrape_falabella
+        assert scrape_falabella.name == "tasks.scrape_falabella"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bot command: /seguir with inline filters
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestSeguirInlineFilters:
+    """Unit tests for /seguir max:<price> tienda:<store> parsing."""
+
+    def _parse_seguir_args(self, args: list[str]):
+        """Mirror the parsing logic in the /seguir handler."""
+        max_price = None
+        store_filter = None
+        keyword_parts = []
+        for arg in args:
+            low = arg.lower()
+            if low.startswith("max:"):
+                raw = low[4:].replace("$", "").replace(",", "")
+                try:
+                    max_price = float(raw)
+                except ValueError:
+                    pass
+            elif low.startswith("tienda:"):
+                store_filter = low[7:].strip() or None
+            else:
+                keyword_parts.append(arg)
+        keyword = " ".join(keyword_parts).strip().lower()
+        return keyword, max_price, store_filter
+
+    def test_keyword_only(self):
+        kw, mx, st = self._parse_seguir_args(["iphone"])
+        assert kw == "iphone"
+        assert mx is None
+        assert st is None
+
+    def test_keyword_with_max_price(self):
+        kw, mx, st = self._parse_seguir_args(["laptop", "max:15000"])
+        assert kw == "laptop"
+        assert mx == 15000.0
+        assert st is None
+
+    def test_keyword_with_store(self):
+        kw, mx, st = self._parse_seguir_args(["samsung", "tienda:liverpool"])
+        assert kw == "samsung"
+        assert mx is None
+        assert st == "liverpool"
+
+    def test_keyword_with_max_and_store(self):
+        kw, mx, st = self._parse_seguir_args(["iphone", "max:20000", "tienda:amazon"])
+        assert kw == "iphone"
+        assert mx == 20000.0
+        assert st == "amazon"
+
+    def test_multi_word_keyword_with_filter(self):
+        kw, mx, st = self._parse_seguir_args(["samsung", "galaxy", "max:12000"])
+        assert kw == "samsung galaxy"
+        assert mx == 12000.0
+
+    def test_max_price_with_dollar_sign(self):
+        kw, mx, st = self._parse_seguir_args(["tv", "max:$8,999"])
+        assert kw == "tv"
+        assert mx == 8999.0
+
+    def test_empty_keyword_after_filtering(self):
+        kw, mx, st = self._parse_seguir_args(["max:5000"])
+        assert kw == ""
+        assert mx == 5000.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bot command: /buscar with tienda: filter
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestBuscarTiendaFilter:
+    """Unit tests for /buscar tienda:<store> parsing."""
+
+    def _parse_buscar_args(self, args: list[str]):
+        """Mirror the parsing logic in the /buscar handler."""
+        store_filter = None
+        query_parts = []
+        for arg in args:
+            if arg.lower().startswith("tienda:"):
+                store_filter = arg[7:].strip().lower() or None
+            else:
+                query_parts.append(arg)
+        raw_query = " ".join(query_parts).strip()
+        return raw_query, store_filter
+
+    def test_keyword_only(self):
+        q, st = self._parse_buscar_args(["iphone"])
+        assert q == "iphone"
+        assert st is None
+
+    def test_keyword_with_store(self):
+        q, st = self._parse_buscar_args(["iphone", "tienda:amazon"])
+        assert q == "iphone"
+        assert st == "amazon"
+
+    def test_multi_word_keyword_with_store(self):
+        q, st = self._parse_buscar_args(["samsung", "galaxy", "tienda:walmart"])
+        assert q == "samsung galaxy"
+        assert st == "walmart"
+
+    def test_store_only(self):
+        q, st = self._parse_buscar_args(["tienda:liverpool"])
+        assert q == ""
+        assert st == "liverpool"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Total scrapers count
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestAllScrapersRegistry:
+    """Verify total scraper count and presence of all expected stores."""
+
+    def test_total_scraper_count(self):
+        from scrapers.manager import ALL_SCRAPERS
+        # 21 original + bestbuy + falabella = 23
+        assert len(ALL_SCRAPERS) >= 23
+
+    def test_all_expected_stores_present(self):
+        from scrapers.manager import ALL_SCRAPERS
+        stores = {cls.store_name for cls in ALL_SCRAPERS}
+        expected = {
+            "amazon", "mercadolibre", "walmart", "liverpool", "bodega_aurrera",
+            "homedepot", "costco", "coppel", "elektra", "sears", "sanborns",
+            "sams_club", "office_depot", "officemax", "soriana",
+            "cyberpuerta", "ddtech", "pcel", "intercompras", "gameplanet",
+            "claro_shop", "bestbuy", "falabella",
+        }
+        missing = expected - stores
+        assert not missing, f"Missing stores: {missing}"

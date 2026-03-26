@@ -23,6 +23,8 @@ from scrapers.bodega_aurrera import BodegaAurreraScraper
 from scrapers.homedepot import HomeDepotScraper
 from scrapers.elektra import ElektraScraper
 from scrapers.coppel import CoppelScraper
+from scrapers.bestbuy import BestBuyScraper
+from scrapers.falabella import FalabellaScraper
 from scrapers.retailers_mx import (
     CostcoScraper,
     SearsScraper,
@@ -64,6 +66,8 @@ ALL_SCRAPERS: list[Type[BaseScraper]] = [
     OfficeDepotScraper,
     OfficeMaxScraper,
     SorianaScraper,
+    BestBuyScraper,
+    FalabellaScraper,
     # Tech stores
     CyberpuertaScraper,
     DDTechScraper,

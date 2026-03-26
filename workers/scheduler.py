@@ -106,6 +106,14 @@ app.conf.beat_schedule = {
         "task": "tasks.scrape_claro_shop",
         "schedule": SCHEDULE_DEFAULT_SECONDS,
     },
+    "scrape-bestbuy": {
+        "task": "tasks.scrape_bestbuy",
+        "schedule": SCHEDULE_DEFAULT_SECONDS,
+    },
+    "scrape-falabella": {
+        "task": "tasks.scrape_falabella",
+        "schedule": SCHEDULE_DEFAULT_SECONDS,
+    },
     # ── Daily deal digest ──────────────────────────────────────────────────────
     "daily-digest": {
         "task": "tasks.publish_daily_digest",
