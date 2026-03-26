@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database.models import Offer, UserSubscription
+from services.search import match_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,6 @@ def notify_subscribers(db: Session, offer: Offer) -> int:
     if product is None:
         return 0
 
-    name_lower = product.name.lower()
     token = settings.TELEGRAM_BOT_TOKEN
     if not token:
         logger.warning("TELEGRAM_BOT_TOKEN not set — subscription alerts suppressed")
@@ -113,8 +113,8 @@ def notify_subscribers(db: Session, offer: Offer) -> int:
     sent = 0
 
     for sub in subs:
-        # Keyword match
-        if sub.keyword not in name_lower:
+        # Keyword match — use token-based OR matching with accent normalization
+        if not match_keywords(product.name, sub.keyword):
             continue
         # Optional price ceiling
         if sub.max_price is not None and offer.current_price > sub.max_price:

@@ -62,6 +62,8 @@ def run_bot() -> None:  # pragma: no cover
             "/status – estadísticas del sistema\n"
             "/ranking – top ofertas últimas 24 h\n"
             "/buscar \\<producto\\> – buscar ofertas activas\n"
+            "/tienda \\<tienda\\> – ofertas de una tienda específica\n"
+            "/precio \\<producto\\> – historial de precio de un producto\n"
             "/ahorro – ahorro total de la comunidad\n"
             "/estadisticas – clics, compras y análisis\n"
             "/categorias – ofertas por categoría\n"
@@ -70,7 +72,10 @@ def run_bot() -> None:  # pragma: no cover
             "/seguir \\<palabra\\> – alerta personalizada de oferta\n"
             "/dejar \\<palabra\\> – cancelar una alerta\n"
             "/mis\\_alertas – ver tus alertas activas\n\n"
-            "💡 _Tip: Usa /seguir iphone para recibir alertas cada vez que aparezca una oferta de iphone_",
+            "💡 *Tips:*\n"
+            "• `/seguir iphone max:15000` — alerta con precio máximo\n"
+            "• `/seguir samsung tienda:liverpool` — alerta por tienda\n"
+            "• `/buscar iphone tienda:amazon` — búsqueda por tienda",
             parse_mode="MarkdownV2",
         )
 
@@ -152,28 +157,66 @@ def run_bot() -> None:  # pragma: no cover
                                         disable_web_page_preview=True)
 
     async def seguir(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Subscribe to keyword alerts: /seguir <keyword>"""
+        """Subscribe to keyword alerts: /seguir <keyword> [max:<price>] [tienda:<store>]"""
         from database.connection import SessionLocal
         from services.subscription_service import add_subscription
 
         if not context.args:
             await update.message.reply_text(
-                "Uso: /seguir <palabra>\n"
-                "Ejemplo: /seguir iphone\n\n"
+                "Uso: /seguir <palabra> [max:<precio>] [tienda:<tienda>]\n\n"
+                "Ejemplos:\n"
+                "  /seguir iphone\n"
+                "  /seguir laptop max:15000\n"
+                "  /seguir samsung tienda:liverpool\n\n"
                 "Recibirás una alerta cada vez que aparezca esa oferta.",
                 disable_web_page_preview=True,
             )
             return
 
-        keyword = " ".join(context.args).strip().lower()
-        chat_id = update.effective_chat.id
+        # Parse optional inline filters: max:<price> and tienda:<store>
+        max_price: float | None = None
+        store_filter: str | None = None
+        keyword_parts: list[str] = []
+        for arg in context.args:
+            low = arg.lower()
+            if low.startswith("max:"):
+                raw = low[4:].replace("$", "").replace(",", "")
+                try:
+                    max_price = float(raw)
+                except ValueError:
+                    pass
+            elif low.startswith("tienda:"):
+                store_filter = low[7:].strip() or None
+            else:
+                keyword_parts.append(arg)
 
+        keyword = " ".join(keyword_parts).strip().lower()
+        if not keyword:
+            await update.message.reply_text(
+                "Por favor indica una palabra clave. Ejemplo: /seguir iphone",
+                disable_web_page_preview=True,
+            )
+            return
+
+        chat_id = update.effective_chat.id
         db = SessionLocal()
         try:
-            add_subscription(db, chat_id, keyword)
+            add_subscription(
+                db,
+                chat_id,
+                keyword,
+                max_price=max_price,
+                store_filter=store_filter,
+            )
             db.commit()
+            extras: list[str] = []
+            if max_price is not None:
+                extras.append(f"precio máx \\${max_price:,.0f}")
+            if store_filter:
+                extras.append(f"tienda: {store_filter.replace('_', ' ')}")
+            detail = f" \\({', '.join(extras)}\\)" if extras else ""
             await update.message.reply_text(
-                f"✅ Ahora recibirás alertas para *{keyword}*\\.",
+                f"✅ Ahora recibirás alertas para *{keyword}*{detail}\\.",
                 parse_mode="MarkdownV2",
             )
         finally:
@@ -372,9 +415,10 @@ def run_bot() -> None:  # pragma: no cover
             db.close()
 
     async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Search for active deals: /buscar <producto>"""
+        """Search for active deals: /buscar <producto> [tienda:<store>]"""
         from database.connection import SessionLocal
         from database.models import Offer, OfferStatus, Publication
+        from services.search import match_keywords, normalize_text
         from sqlalchemy import desc
         from sqlalchemy.orm import joinedload
         from datetime import datetime, timedelta, timezone
@@ -382,14 +426,33 @@ def run_bot() -> None:  # pragma: no cover
         if not context.args:
             await update.message.reply_text(
                 "🔍 *Búsqueda de ofertas*\n\n"
-                "Uso: /buscar <producto>\n"
-                "Ejemplo: /buscar iphone\n\n"
+                "Uso: /buscar <producto> [tienda:<tienda>]\n"
+                "Ejemplos:\n"
+                "  /buscar iphone\n"
+                "  /buscar laptop tienda:amazon\n\n"
                 "Buscaré entre las ofertas publicadas en las últimas 24 horas.",
                 parse_mode="Markdown",
             )
             return
 
-        keyword = " ".join(context.args).strip().lower()
+        # Parse optional tienda: filter
+        store_filter: str | None = None
+        query_parts: list[str] = []
+        for arg in context.args:
+            if arg.lower().startswith("tienda:"):
+                store_filter = arg[7:].strip().lower() or None
+            else:
+                query_parts.append(arg)
+
+        raw_query = " ".join(query_parts).strip()
+        if not raw_query:
+            await update.message.reply_text(
+                "Por favor indica un producto. Ejemplo: /buscar iphone",
+                disable_web_page_preview=True,
+            )
+            return
+
+        keyword = normalize_text(raw_query)
         db = SessionLocal()
         try:
             cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
@@ -406,21 +469,25 @@ def run_bot() -> None:  # pragma: no cover
                 .all()
             )
 
-            # Filter by keyword in product name
+            # Filter by keyword using token-based OR matching + optional store filter
             matches = [
-                o for o in offers if keyword in o.product.name.lower()
+                o for o in offers
+                if match_keywords(o.product.name, raw_query)
+                and (store_filter is None or o.product.store == store_filter)
             ]
 
+            store_label = f" en *{store_filter.replace('_', ' ').title()}*" if store_filter else ""
             if not matches:
                 await update.message.reply_text(
-                    f"😔 No encontré ofertas para *{keyword}* en las últimas 24 h\\.\n\n"
+                    f"😔 No encontré ofertas para *{keyword}*{store_label} en las últimas 24 h\\.\n\n"
                     f"Usa /seguir {keyword} para recibir una alerta cuando aparezca\\.",
                     parse_mode="MarkdownV2",
                 )
                 return
 
-            lines = [f"🔍 *Resultados para «{keyword}»* ({len(matches)} encontrados)\n"]
-            for o in matches[:5]:
+            header = f"🔍 *Resultados para «{keyword}»*{store_label} ({len(matches)} encontrados)\n"
+            lines = [header]
+            for o in matches[:8]:
                 p = o.product
                 url = o.affiliate_url or p.url
                 name = p.name[:40] + "…" if len(p.name) > 40 else p.name
@@ -431,8 +498,185 @@ def run_bot() -> None:  # pragma: no cover
                     f"  🏬 {p.store.replace('_', ' ').title()}"
                 )
 
+            if len(matches) > 8:
+                lines.append(f"\n_...y {len(matches) - 8} más. Refina tu búsqueda para ver otros._")
+
             await update.message.reply_text(
                 "\n".join(lines),
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        finally:
+            db.close()
+
+    async def tienda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show recent published deals from a specific store: /tienda <store>"""
+        from database.connection import SessionLocal
+        from database.models import Offer, OfferStatus, Publication, Product
+        from scrapers.manager import ALL_SCRAPERS
+        from sqlalchemy import desc
+        from sqlalchemy.orm import joinedload
+        from datetime import datetime, timedelta, timezone
+
+        # Build list of known store names for the help message
+        known_stores = sorted({cls.store_name for cls in ALL_SCRAPERS})
+
+        if not context.args:
+            store_list = ", ".join(known_stores)
+            await update.message.reply_text(
+                "🏬 *Ofertas por tienda*\n\n"
+                "Uso: /tienda <nombre>\n"
+                "Ejemplo: /tienda amazon\n\n"
+                f"Tiendas disponibles:\n`{store_list}`",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+            return
+
+        store_name = " ".join(context.args).strip().lower().replace(" ", "_")
+        db = SessionLocal()
+        try:
+            cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+            offers = (
+                db.query(Offer)
+                .join(Publication, Offer.id == Publication.offer_id)
+                .join(Product, Offer.product_id == Product.id)
+                .options(joinedload(Offer.product))
+                .filter(
+                    Offer.status == OfferStatus.PUBLISHED,
+                    Publication.success.is_(True),
+                    Publication.sent_at >= cutoff,
+                    Product.store == store_name,
+                )
+                .order_by(desc(Offer.score))
+                .limit(10)
+                .all()
+            )
+
+            store_label = store_name.replace("_", " ").title()
+            if not offers:
+                await update.message.reply_text(
+                    f"😔 No hay ofertas recientes de *{store_label}* en las últimas 24 h\\.\n\n"
+                    f"Tiendas disponibles: {', '.join(known_stores[:8])}\\.\\.\\.",
+                    parse_mode="MarkdownV2",
+                )
+                return
+
+            lines = [f"🏬 *Ofertas de {store_label}* — últimas 24 h ({len(offers)} encontradas)\n"]
+            for o in offers:
+                p = o.product
+                url = o.affiliate_url or p.url
+                name = p.name[:45] + "…" if len(p.name) > 45 else p.name
+                saving = o.original_price - o.current_price
+                lines.append(
+                    f"• [{name}]({url})\n"
+                    f"  💸 *{o.discount_pct:.0f}% OFF* — Ahorra *${saving:,.0f} MXN*\n"
+                    f"  ⭐ Score: {o.score}"
+                )
+
+            await update.message.reply_text(
+                "\n".join(lines),
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        finally:
+            db.close()
+
+    async def precio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show price history for a product: /precio <product name>"""
+        from database.connection import SessionLocal
+        from database.models import PriceHistory, Product
+        from services.price_sparkline import get_sparkline, is_all_time_low
+        from services.search import match_keywords
+        from sqlalchemy import func
+
+        if not context.args:
+            await update.message.reply_text(
+                "📈 *Historial de precios*\n\n"
+                "Uso: /precio <producto>\n"
+                "Ejemplo: /precio iphone 15\n\n"
+                "Mostraré el historial de precio del producto más relevante "
+                "encontrado en nuestra base de datos.",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+            return
+
+        raw_query = " ".join(context.args).strip()
+        db = SessionLocal()
+        try:
+            # Find all products with at least one price history entry
+            products_with_history = (
+                db.query(Product)
+                .join(PriceHistory, Product.id == PriceHistory.product_id)
+                .filter(
+                    Product.available.is_(True),
+                    Product.current_price.isnot(None),
+                )
+                .distinct()
+                .all()
+            )
+
+            # Filter by keyword match
+            matches = [
+                p for p in products_with_history
+                if match_keywords(p.name, raw_query)
+            ]
+
+            if not matches:
+                await update.message.reply_text(
+                    f"😔 No encontré productos para *{raw_query}* con historial de precios\\.\n\n"
+                    "Nuestros scrapers recopilan historial automáticamente\\. "
+                    "Intenta con /buscar para ver ofertas activas\\.",
+                    parse_mode="MarkdownV2",
+                )
+                return
+
+            # Pick the product with the most price history entries
+            def _history_count(p: Product) -> int:
+                return (
+                    db.query(func.count(PriceHistory.id))
+                    .filter(PriceHistory.product_id == p.id)
+                    .scalar()
+                    or 0
+                )
+
+            best = max(matches[:20], key=_history_count)
+
+            # Gather price statistics
+            history_rows = (
+                db.query(PriceHistory.price, PriceHistory.recorded_at)
+                .filter(PriceHistory.product_id == best.id)
+                .order_by(PriceHistory.recorded_at)
+                .all()
+            )
+            prices = [r.price for r in history_rows]
+            min_price = min(prices)
+            max_price = max(prices)
+            avg_price = sum(prices) / len(prices)
+            current = best.current_price or prices[-1]
+            at_low = is_all_time_low(db, best.id, current)
+            sparkline = get_sparkline(db, best.id) or "— (pocos datos)"
+
+            low_badge = " 🔥 *¡Mínimo histórico\\!*" if at_low else ""
+            name = best.name[:60] + "…" if len(best.name) > 60 else best.name
+            store_label = best.store.replace("_", " ").title()
+            url = best.url
+
+            text = (
+                f"📈 *Historial de precio*\n\n"
+                f"[{name}]({url})\n"
+                f"🏬 {store_label}\n\n"
+                f"💰 *Precio actual:* ${current:,.2f} MXN{low_badge}\n"
+                f"📉 *Mínimo histórico:* ${min_price:,.2f} MXN\n"
+                f"📈 *Máximo histórico:* ${max_price:,.2f} MXN\n"
+                f"📊 *Precio promedio:* ${avg_price:,.2f} MXN\n"
+                f"🔢 *Observaciones:* {len(prices)}\n\n"
+                f"📉 *Tendencia:*\n`{sparkline}`\n"
+                f"_(izquierda = más antiguo, derecha = actual)_"
+            )
+            await update.message.reply_text(
+                text,
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
             )
@@ -466,24 +710,23 @@ def run_bot() -> None:  # pragma: no cover
                 )
                 return
 
-            # Build category → list of (saving, discount) map
             cat_data: dict[str, list[float]] = {}
             for o in offers:
-                # Load the product
                 product = db.query(Product).filter(Product.id == o.product_id).first()
                 cat = (product.category if product else None) or "General"
                 if cat not in cat_data:
                     cat_data[cat] = []
                 cat_data[cat].append(o.discount_pct)
 
-            # Sort by offer count desc
             sorted_cats = sorted(cat_data.items(), key=lambda x: len(x[1]), reverse=True)
 
             lines = ["📂 *OFERTAS POR CATEGORÍA — Hoy*\n"]
             for cat, discounts in sorted_cats[:10]:
                 count = len(discounts)
                 avg_disc = sum(discounts) / count
-                lines.append(f"• *{cat}*: {count} oferta{'s' if count > 1 else ''} · promedio {avg_disc:.0f}%")
+                lines.append(
+                    f"• *{cat}*: {count} oferta{'s' if count > 1 else ''} · promedio {avg_disc:.0f}%"
+                )
 
             lines.append("\n_Usa /buscar <producto> para buscar en estas categorías_")
             await update.message.reply_text(
@@ -501,6 +744,8 @@ def run_bot() -> None:  # pragma: no cover
     app.add_handler(CommandHandler("estadisticas", estadisticas))
     app.add_handler(CommandHandler("ahorro", ahorro))
     app.add_handler(CommandHandler("buscar", buscar))
+    app.add_handler(CommandHandler("tienda", tienda))
+    app.add_handler(CommandHandler("precio", precio))
     app.add_handler(CommandHandler("categorias", categorias))
     app.add_handler(CommandHandler("ingresos", ingresos))
     app.add_handler(CommandHandler("comisiones", comisiones))

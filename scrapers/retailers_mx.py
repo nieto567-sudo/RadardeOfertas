@@ -1,9 +1,14 @@
 """
-Additional Mexican retailer scrapers: Costco, Coppel, Elektra, Sears,
+Additional Mexican retailer scrapers: Costco, Sears,
 Sanborns, Sam's Club, Office Depot / OfficeMax, Soriana.
 
-Each follows the same lightweight pattern: scrape search-results HTML,
-extract product cards, return a list of ProductData.
+Coppel and Elektra have been moved to dedicated modules
+(``scrapers/coppel.py`` and ``scrapers/elektra.py``) that use their
+respective platform APIs for better reliability.
+
+Re-exported here for backward compatibility::
+
+    from scrapers.retailers_mx import CoppelScraper, ElektraScraper
 """
 from __future__ import annotations
 
@@ -12,6 +17,8 @@ import logging
 import requests
 
 from scrapers.base import BaseScraper, ProductData
+from scrapers.coppel import CoppelScraper  # noqa: F401 — re-exported
+from scrapers.elektra import ElektraScraper  # noqa: F401 — re-exported
 
 logger = logging.getLogger(__name__)
 
@@ -140,26 +147,6 @@ class CostcoScraper(_SimpleSearchScraper):
     _css_price = "span[class*='price'], [class*='Price']"
     _q_param = "text"
     _extra_params = {"searchOption": "mx-search-all"}
-
-
-class CoppelScraper(_SimpleSearchScraper):
-    store_name = "coppel"
-    BASE_URL = "https://www.coppel.com"
-    SEARCH_URL = "https://www.coppel.com/search"
-    _css_card = "div[class*='product-item'], li[class*='product']"
-    _css_name = "p[class*='name'], span[class*='name'], h3"
-    _css_price = "p[class*='price'], span[class*='price']"
-    _q_param = "q"
-
-
-class ElektraScraper(_SimpleSearchScraper):
-    store_name = "elektra"
-    BASE_URL = "https://www.elektra.com.mx"
-    SEARCH_URL = "https://www.elektra.com.mx/busqueda"
-    _css_card = "div[class*='product-card'], div[class*='product-item']"
-    _css_name = "h3, span[class*='title'], p[class*='name']"
-    _css_price = "span[class*='price'], p[class*='price']"
-    _q_param = "q"
 
 
 class SearsScraper(_SimpleSearchScraper):
