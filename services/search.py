@@ -7,7 +7,7 @@ Telegram ``/buscar`` command and the subscription-alert system.
 Matching strategy
 -----------------
 * The query is split into individual tokens (words).
-* Each token is compared against the normalised product name.
+* Each token is compared against the normalized product name.
 * A product *matches* when **at least one token** is found in its name
   (OR logic).  This is intentionally permissive so that multi-word queries
   like "iphone 15 pro 256" still return iPhone 15 Pro results even when the
@@ -29,7 +29,7 @@ _MIN_TOKEN_LEN = 2
 
 
 def normalize_text(text: str) -> str:
-    """Return a normalised, lowercase, accent-free version of *text*.
+    """Return a normalized, lowercase, accent-free version of *text*.
 
     Steps applied:
     1. Unicode NFKD decomposition → strip combining (accent) characters.
@@ -59,7 +59,7 @@ def normalize_text(text: str) -> str:
 
 
 def tokenize(query: str) -> list[str]:
-    """Split a normalised query into meaningful tokens.
+    """Split a normalized query into meaningful tokens.
 
     Tokens shorter than :data:`_MIN_TOKEN_LEN` characters are discarded.
 
@@ -77,10 +77,10 @@ def match_keywords(product_name: str, query: str) -> bool:
     """Return ``True`` when *product_name* matches *query*.
 
     Matching is performed at the token level with **OR** logic: the product
-    matches if at least one token from the (normalised) query appears anywhere
-    in the (normalised) product name.
+    matches if at least one token from the (normalized) query appears anywhere
+    in the (normalized) product name.
 
-    If the query produces no tokens after normalisation the function returns
+    If the query produces no tokens after normalization the function returns
     ``False``.
 
     Debug-level logs are emitted so that unexpected misses can be diagnosed

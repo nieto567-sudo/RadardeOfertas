@@ -999,7 +999,7 @@ class TestSubscriptionService:
         mock_db.query.return_value.filter_by.return_value.first.return_value = None
 
         sub = add_subscription(mock_db, chat_id=123, keyword="iPhone")
-        assert sub.keyword == "iphone"   # normalised to lowercase
+        assert sub.keyword == "iphone"   # normalized to lowercase
         assert sub.active is True
         mock_db.add.assert_called_once_with(sub)
 
@@ -2820,7 +2820,7 @@ class TestPriceErrorAdminNotification:
 class TestPublicationGuard:
     """Tests for services.publication_guard."""
 
-    # ── URL normalisation ─────────────────────────────────────────────────────
+    # ── URL normalization ─────────────────────────────────────────────────────
 
     def test_normalise_strips_utm_params(self):
         from services.publication_guard import normalise_url
@@ -3013,9 +3013,9 @@ class TestPublicationGuard:
         try:
             with patch.object(publication_guard.settings, "PUBLISHED_URLS_FILE", tmp_path):
                 url = "https://www.walmart.com.mx/p/unique-item-xyz"
-                normalised = publication_guard.normalise_url(url)
-                publication_guard._add_to_published_store(normalised)
-                assert publication_guard.is_duplicate(normalised) is True
+                normalized = publication_guard.normalise_url(url)
+                publication_guard._add_to_published_store(normalized)
+                assert publication_guard.is_duplicate(normalized) is True
         finally:
             os.unlink(tmp_path)
 
@@ -3349,3 +3349,537 @@ class TestStoreSearchUrls:
 
         stores = [cls.store_name for cls in ALL_SCRAPERS]
         assert "homedepot" in stores
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# services/search — normalize_text, tokenize, match_keywords
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestNormalizeText:
+    """Tests for services.search.normalize_text."""
+
+    def setup_method(self):
+        from services.search import normalize_text
+        self.normalize = normalize_text
+
+    def test_lowercase(self):
+        assert self.normalize("iPhone") == "iphone"
+
+    def test_removes_accent_acute(self):
+        assert self.normalize("televisión") == "television"
+
+    def test_removes_accent_tilde(self):
+        assert self.normalize("niño") == "nino"
+
+    def test_removes_accent_umlaut(self):
+        assert self.normalize("Ü") == "u"
+
+    def test_collapses_spaces(self):
+        assert self.normalize("  iphone   15  ") == "iphone 15"
+
+    def test_replaces_punctuation_with_space(self):
+        result = self.normalize("iphone-15/pro")
+        assert "-" not in result and "/" not in result
+
+    def test_empty_string(self):
+        assert self.normalize("") == ""
+
+    def test_mixed(self):
+        result = self.normalize("Televisión — 55'' 4K")
+        assert "television" in result
+        assert "4k" in result
+
+
+class TestTokenize:
+    """Tests for services.search.tokenize."""
+
+    def setup_method(self):
+        from services.search import tokenize
+        self.tokenize = tokenize
+
+    def test_basic(self):
+        assert self.tokenize("iphone 15 pro") == ["iphone", "15", "pro"]
+
+    def test_filters_short_tokens(self):
+        # single-char token "a" should be dropped (< _MIN_TOKEN_LEN=2)
+        tokens = self.tokenize("a laptop")
+        assert "a" not in tokens
+        assert "laptop" in tokens
+
+    def test_accent_normalization(self):
+        tokens = self.tokenize("televisión")
+        assert tokens == ["television"]
+
+    def test_empty(self):
+        assert self.tokenize("") == []
+
+    def test_multiple_spaces(self):
+        assert self.tokenize("  iphone   15  ") == ["iphone", "15"]
+
+
+class TestMatchKeywords:
+    """Tests for services.search.match_keywords — the core search logic."""
+
+    def setup_method(self):
+        from services.search import match_keywords
+        self.match = match_keywords
+
+    # ── basic single-token cases ──────────────────────────────────────────────
+
+    def test_exact_single_token(self):
+        assert self.match("Apple iPhone 15 Pro", "iphone") is True
+
+    def test_no_match(self):
+        assert self.match("Samsung Galaxy S24", "iphone") is False
+
+    # ── accent insensitivity ──────────────────────────────────────────────────
+
+    def test_accent_query_matches_plain_product(self):
+        """Query with accent → product without accent must match."""
+        assert self.match("Television Samsung 55 pulgadas", "televisión") is True
+
+    def test_plain_query_matches_accented_product(self):
+        """Plain query → product with accent must match."""
+        assert self.match("Televisión Samsung 55", "television") is True
+
+    def test_accent_both_sides(self):
+        assert self.match("Televisión 55 pulgadas", "televisión") is True
+
+    # ── multi-token OR logic ──────────────────────────────────────────────────
+
+    def test_multi_token_partial_match(self):
+        """'iphone 15 pro 256' must match a product that has 'iphone' even
+        if it lacks '256' — OR logic between tokens."""
+        assert self.match("Apple iPhone 15 Pro 512GB", "iphone 15 pro 256") is True
+
+    def test_multi_token_all_missing(self):
+        """No token matches → must return False."""
+        assert self.match("Samsung Galaxy S24 Ultra", "iphone 15 pro 256") is False
+
+    def test_multi_token_at_least_one(self):
+        """Match when only 1 of 4 tokens is present."""
+        assert self.match("Laptop Dell Inspiron 15", "iphone 15 pro 256") is True
+
+    # ── edge cases ────────────────────────────────────────────────────────────
+
+    def test_empty_query(self):
+        assert self.match("Apple iPhone 15", "") is False
+
+    def test_empty_product_name(self):
+        assert self.match("", "iphone") is False
+
+    def test_case_insensitive(self):
+        assert self.match("Apple IPHONE 15 PRO", "iPhone") is True
+
+    def test_numeric_token(self):
+        assert self.match("iPhone 15 Pro 256GB", "256") is True
+
+    # ── structured-filter interaction (store/price are applied externally) ────
+
+    def test_store_filter_not_applied_by_match_keywords(self):
+        """match_keywords only checks the product name; store filtering is
+        the caller's responsibility."""
+        # Always True when name matches — store is not part of this function
+        assert self.match("iPhone 15 Pro", "iphone") is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# subscription_service — notify_subscribers uses match_keywords
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestNotifySubscribersSearch:
+    """Verify that notify_subscribers uses flexible keyword matching."""
+
+    def _make_offer(self, product_name: str, store: str = "amazon"):
+        product = MagicMock()
+        product.name = product_name
+        product.store = store
+        product.url = "https://example.com/p/1"
+        offer = MagicMock()
+        offer.product = product
+        offer.current_price = 999.0
+        offer.original_price = 1999.0
+        offer.discount_pct = 50.0
+        offer.affiliate_url = None
+        return offer
+
+    def _make_subscription(self, keyword: str, max_price=None, store_filter=None):
+        sub = MagicMock()
+        sub.keyword = keyword
+        sub.max_price = max_price
+        sub.store_filter = store_filter
+        sub.chat_id = 12345
+        return sub
+
+    def test_accent_insensitive_subscription_match(self):
+        """Subscription keyword 'television' must match product 'Televisión Samsung'."""
+        from services.subscription_service import notify_subscribers
+        from unittest.mock import patch, MagicMock
+
+        offer = self._make_offer("Televisión Samsung 55 pulgadas")
+        sub = self._make_subscription("television")
+
+        db = MagicMock()
+        db.query.return_value.filter_by.return_value.all.return_value = [sub]
+
+        with patch("services.subscription_service.settings") as mock_settings, \
+             patch("services.subscription_service._send_dm") as mock_dm:
+            mock_settings.TELEGRAM_BOT_TOKEN = "fake-token"
+            count = notify_subscribers(db, offer)
+
+        assert count == 1
+        mock_dm.assert_called_once()
+
+    def test_partial_keyword_match_fires_alert(self):
+        """Subscription 'iphone' must match product 'Apple iPhone 15 Pro'."""
+        from services.subscription_service import notify_subscribers
+        from unittest.mock import patch, MagicMock
+
+        offer = self._make_offer("Apple iPhone 15 Pro 256GB")
+        sub = self._make_subscription("iphone")
+
+        db = MagicMock()
+        db.query.return_value.filter_by.return_value.all.return_value = [sub]
+
+        with patch("services.subscription_service.settings") as mock_settings, \
+             patch("services.subscription_service._send_dm") as mock_dm:
+            mock_settings.TELEGRAM_BOT_TOKEN = "fake-token"
+            count = notify_subscribers(db, offer)
+
+        assert count == 1
+
+    def test_price_ceiling_respected(self):
+        """Even with a matching keyword, price ceiling must block the alert."""
+        from services.subscription_service import notify_subscribers
+        from unittest.mock import patch, MagicMock
+
+        offer = self._make_offer("iPhone 15 Pro")
+        offer.current_price = 25000.0
+        sub = self._make_subscription("iphone", max_price=10000.0)
+
+        db = MagicMock()
+        db.query.return_value.filter_by.return_value.all.return_value = [sub]
+
+        with patch("services.subscription_service.settings") as mock_settings, \
+             patch("services.subscription_service._send_dm") as mock_dm:
+            mock_settings.TELEGRAM_BOT_TOKEN = "fake-token"
+            count = notify_subscribers(db, offer)
+
+        assert count == 0
+        mock_dm.assert_not_called()
+
+    def test_store_filter_respected(self):
+        """Store filter must still apply (AND logic) even with matching keyword."""
+        from services.subscription_service import notify_subscribers
+        from unittest.mock import patch, MagicMock
+
+        offer = self._make_offer("iPhone 15 Pro", store="walmart")
+        sub = self._make_subscription("iphone", store_filter="amazon")
+
+        db = MagicMock()
+        db.query.return_value.filter_by.return_value.all.return_value = [sub]
+
+        with patch("services.subscription_service.settings") as mock_settings, \
+             patch("services.subscription_service._send_dm") as mock_dm:
+            mock_settings.TELEGRAM_BOT_TOKEN = "fake-token"
+            count = notify_subscribers(db, offer)
+
+        assert count == 0
+        mock_dm.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Elektra scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestElektraScraper:
+    """Unit tests for the Elektra VTEX scraper."""
+
+    def setup_method(self):
+        from scrapers.elektra import ElektraScraper
+        self.scraper = ElektraScraper.__new__(ElektraScraper)
+        self.scraper.session = MagicMock()
+        self.scraper.timeout = 10
+        self.scraper.delay = 0
+
+    def test_store_name(self):
+        from scrapers.elektra import ElektraScraper
+        assert ElektraScraper.store_name == "elektra"
+
+    def test_base_url_uses_elektra_mx(self):
+        from scrapers.elektra import ElektraScraper
+        assert "elektra.mx" in ElektraScraper.BASE_URL
+
+    def test_registered_in_manager(self):
+        from scrapers.manager import ALL_SCRAPERS
+        stores = [cls.store_name for cls in ALL_SCRAPERS]
+        assert "elektra" in stores
+
+    def test_parse_vtex_api_response(self):
+        """_search_api should correctly parse a VTEX catalog JSON response."""
+        import json
+        from scrapers.elektra import ElektraScraper
+        from unittest.mock import patch, MagicMock
+
+        scraper = ElektraScraper.__new__(ElektraScraper)
+        scraper.session = MagicMock()
+        scraper.timeout = 10
+        scraper.delay = 0
+
+        vtex_response = [
+            {
+                "productId": "123",
+                "productName": "Apple iPhone 15 Pro 256GB",
+                "link": "/iphone-15-pro/p",
+                "categories": ["/Celulares/Apple/"],
+                "items": [
+                    {
+                        "sellers": [
+                            {
+                                "commertialOffer": {
+                                    "Price": 22999.0,
+                                    "ListPrice": 27999.0,
+                                    "AvailableQuantity": 5,
+                                }
+                            }
+                        ],
+                        "images": [{"imageUrl": "https://img.elektra.mx/img/123.jpg"}],
+                    }
+                ],
+            }
+        ]
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = vtex_response
+
+        with patch.object(scraper, "get", return_value=mock_resp):
+            results = scraper._search_api("iphone")
+
+        assert len(results) == 1
+        assert results[0].name == "Apple iPhone 15 Pro 256GB"
+        assert results[0].price == 22999.0
+        assert results[0].store == "elektra"
+        assert results[0].external_id == "123"
+        assert results[0].available is True
+        assert results[0].image_url == "https://img.elektra.mx/img/123.jpg"
+
+    def test_api_skips_zero_price(self):
+        """Products with price=0 or None must be filtered out."""
+        from scrapers.elektra import ElektraScraper
+        from unittest.mock import patch, MagicMock
+
+        scraper = ElektraScraper.__new__(ElektraScraper)
+        scraper.session = MagicMock()
+        scraper.timeout = 10
+        scraper.delay = 0
+
+        vtex_response = [
+            {
+                "productId": "999",
+                "productName": "Ghost Product",
+                "link": "/ghost/p",
+                "categories": [],
+                "items": [
+                    {
+                        "sellers": [
+                            {"commertialOffer": {"Price": 0, "AvailableQuantity": 0}}
+                        ],
+                        "images": [],
+                    }
+                ],
+            }
+        ]
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = vtex_response
+
+        with patch.object(scraper, "get", return_value=mock_resp):
+            results = scraper._search_api("ghost")
+
+        assert results == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Coppel scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestCoppelScraper:
+    """Unit tests for the Coppel scraper."""
+
+    def test_store_name(self):
+        from scrapers.coppel import CoppelScraper
+        assert CoppelScraper.store_name == "coppel"
+
+    def test_base_url(self):
+        from scrapers.coppel import CoppelScraper
+        assert CoppelScraper.BASE_URL == "https://www.coppel.com"
+
+    def test_registered_in_manager(self):
+        from scrapers.manager import ALL_SCRAPERS
+        stores = [cls.store_name for cls in ALL_SCRAPERS]
+        assert "coppel" in stores
+
+    def test_category_urls_structure(self):
+        """Each known category URL entry must include path and node IDs."""
+        from scrapers.coppel import _CATEGORY_URLS
+        for label, path, pm_id, pr_id in _CATEGORY_URLS:
+            assert label, "label must not be empty"
+            assert path, "path must not be empty"
+            assert pm_id.isdigit(), f"pmNodeId must be numeric, got {pm_id!r}"
+            assert pr_id.isdigit(), f"prNodeId must be numeric, got {pr_id!r}"
+
+    def test_celulares_category_url_matches_provided(self):
+        """The 'celulares' category URL must match the one given in the spec."""
+        from scrapers.coppel import _CATEGORY_URLS, _BASE_URL
+        entry = next((e for e in _CATEGORY_URLS if e[0] == "celulares"), None)
+        assert entry is not None, "celulares category must be configured"
+        label, path, pm_id, pr_id = entry
+        full_url = f"{_BASE_URL}/sd/{path}"
+        assert "coppel.com/sd/" in full_url
+        assert pm_id == "11404"
+        assert pr_id == "11419"
+
+    def test_parse_html_cards(self):
+        """_parse_product_cards must extract products from HTML."""
+        from scrapers.coppel import CoppelScraper
+        from bs4 import BeautifulSoup
+
+        scraper = CoppelScraper.__new__(CoppelScraper)
+
+        html = """
+        <html><body>
+          <div class="product-item">
+            <h3>Samsung Galaxy S24</h3>
+            <span class="price">$18,999.00</span>
+            <a href="/celulares/samsung-s24">Ver</a>
+          </div>
+          <div class="product-item">
+            <h3>Apple iPhone 15</h3>
+            <span class="price">$22,999.00</span>
+            <a href="/celulares/iphone-15">Ver</a>
+          </div>
+        </body></html>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        results = scraper._parse_product_cards(soup, "celulares")
+
+        assert len(results) == 2
+        names = [r.name for r in results]
+        assert "Samsung Galaxy S24" in names
+        assert "Apple iPhone 15" in names
+        assert results[0].store == "coppel"
+        assert results[0].price > 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Amazon scraper improvements
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestAmazonScraperImproved:
+    """Tests for the improved Amazon Mexico scraper."""
+
+    def test_user_agent_pool_not_empty(self):
+        from scrapers.amazon import _USER_AGENTS
+        assert len(_USER_AGENTS) >= 2
+
+    def test_browser_headers_contain_required_fields(self):
+        from scrapers.amazon import AmazonScraper
+        headers = AmazonScraper._browser_headers()
+        assert "User-Agent" in headers
+        assert "Accept" in headers
+        assert "Accept-Language" in headers
+        assert "es-MX" in headers["Accept-Language"]
+
+    def test_extract_price_from_offscreen(self):
+        """_extract_price must find price in span.a-offscreen."""
+        from scrapers.amazon import AmazonScraper
+        from bs4 import BeautifulSoup
+
+        html = """
+        <div>
+          <span class="a-offscreen">$12,999.00</span>
+        </div>
+        """
+        card = BeautifulSoup(html, "lxml").div
+        price = AmazonScraper._extract_price(card)
+        assert price == 12999.0
+
+    def test_extract_price_from_whole_fraction(self):
+        """_extract_price must combine a-price-whole + a-price-fraction."""
+        from scrapers.amazon import AmazonScraper
+        from bs4 import BeautifulSoup
+
+        html = """
+        <div>
+          <span class="a-price-whole">1299</span>
+          <span class="a-price-fraction">00</span>
+        </div>
+        """
+        card = BeautifulSoup(html, "lxml").div
+        price = AmazonScraper._extract_price(card)
+        assert price == 1299.00
+
+    def test_extract_price_fallback_regex(self):
+        """_extract_price must fall back to regex scanning card text."""
+        from scrapers.amazon import AmazonScraper
+        from bs4 import BeautifulSoup
+
+        html = """
+        <div>
+          <p>Precio: $8,500.00 MXN</p>
+        </div>
+        """
+        card = BeautifulSoup(html, "lxml").div
+        price = AmazonScraper._extract_price(card)
+        assert price == 8500.0
+
+    def test_extract_price_returns_none_when_absent(self):
+        from scrapers.amazon import AmazonScraper
+        from bs4 import BeautifulSoup
+
+        html = "<div><p>No price here</p></div>"
+        card = BeautifulSoup(html, "lxml").div
+        assert AmazonScraper._extract_price(card) is None
+
+    def test_name_selectors_list_not_empty(self):
+        from scrapers.amazon import _NAME_SELECTORS
+        assert len(_NAME_SELECTORS) >= 3
+
+    def test_scrape_search_with_mock_html(self):
+        """_scrape_search must parse a realistic-looking Amazon HTML fragment."""
+        from scrapers.amazon import AmazonScraper
+        from unittest.mock import patch, MagicMock
+
+        html = """
+        <html><body>
+          <div data-asin="B0CHX1W1XY"
+               data-component-type="s-search-result"
+               data-index="1">
+            <h2><a href="/dp/B0CHX1W1XY"><span>Apple iPhone 15 128GB Negro</span></a></h2>
+            <span class="a-offscreen">$18,999.00</span>
+            <img class="s-image" src="https://m.media-amazon.com/images/I/img.jpg"/>
+          </div>
+        </body></html>
+        """
+
+        scraper = AmazonScraper.__new__(AmazonScraper)
+        scraper.session = MagicMock()
+        scraper.timeout = 10
+        scraper.delay = 0
+
+        mock_resp = MagicMock()
+        mock_resp.text = html
+
+        with patch.object(scraper, "get", return_value=mock_resp):
+            results = scraper._scrape_search("iphone")
+
+        assert len(results) == 1
+        assert "iPhone" in results[0].name
+        assert results[0].price == 18999.0
+        assert results[0].external_id == "B0CHX1W1XY"
+        assert results[0].store == "amazon"

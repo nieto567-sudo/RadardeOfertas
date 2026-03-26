@@ -21,10 +21,10 @@ from scrapers.walmart import WalmartScraper
 from scrapers.liverpool import LiverpoolScraper
 from scrapers.bodega_aurrera import BodegaAurreraScraper
 from scrapers.homedepot import HomeDepotScraper
+from scrapers.elektra import ElektraScraper
+from scrapers.coppel import CoppelScraper
 from scrapers.retailers_mx import (
     CostcoScraper,
-    CoppelScraper,
-    ElektraScraper,
     SearsScraper,
     SanbornsScraper,
     SamsClubScraper,
