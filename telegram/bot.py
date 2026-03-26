@@ -375,6 +375,7 @@ def run_bot() -> None:  # pragma: no cover
         """Search for active deals: /buscar <producto>"""
         from database.connection import SessionLocal
         from database.models import Offer, OfferStatus, Publication
+        from services.search import match_keywords, normalize_text
         from sqlalchemy import desc
         from sqlalchemy.orm import joinedload
         from datetime import datetime, timedelta, timezone
@@ -389,7 +390,8 @@ def run_bot() -> None:  # pragma: no cover
             )
             return
 
-        keyword = " ".join(context.args).strip().lower()
+        raw_query = " ".join(context.args).strip()
+        keyword = normalize_text(raw_query)
         db = SessionLocal()
         try:
             cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
@@ -406,9 +408,10 @@ def run_bot() -> None:  # pragma: no cover
                 .all()
             )
 
-            # Filter by keyword in product name
+            # Filter by keyword using token-based OR matching with accent-insensitive
+            # normalization; structured filters (price, store) are applied separately.
             matches = [
-                o for o in offers if keyword in o.product.name.lower()
+                o for o in offers if match_keywords(o.product.name, raw_query)
             ]
 
             if not matches:
